@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Like System Architecture Evolution</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .stage {
+            padding: 30px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .stage:last-child {
+            border-bottom: none;
+        }
+
+        .stage h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+            border-left: 5px solid #3498db;
+            padding-left: 15px;
+        }
+
+        .diagram {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 30px;
+            margin: 20px 0;
+            border: 2px dashed #e9ecef;
+            position: relative;
+            overflow-x: auto;
+        }
+
+        .box {
+            display: inline-block;
+            padding: 12px 20px;
+            margin: 8px;
+            border-radius: 8px;
+            font-weight: bold;
+            text-align: center;
+            min-width: 120px;
+            position: relative;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease;
+        }
+
+        .box:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        .client { background: #ff6b6b; color: white; }
+        .service { background: #4ecdc4; color: white; }
+        .database { background: #45b7d1; color: white; }
+        .cache { background: #f9ca24; color: #333; }
+        .queue { background: #f0932b; color: white; }
+        .global { background: #6c5ce7; color: white; }
+        .region { background: #a29bfe; color: white; }
+
+        .arrow {
+            display: inline-block;
+            margin: 0 10px;
+            font-size: 20px;
+            color: #7f8c8d;
+            font-weight: bold;
+        }
+
+        .vertical-arrow {
+            text-align: center;
+            font-size: 24px;
+            color: #7f8c8d;
+            margin: 10px 0;
+        }
+
+        .flow-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 15px 0;
+        }
+
+        .region-container {
+            background: linear-gradient(145deg, #f8f9fa, #e9ecef);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+            border: 2px solid #dee2e6;
+        }
+
+        .region-header {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 15px;
+            color: #495057;
+            text-align: center;
+        }
+
+        .metrics {
+            background: #e8f4f8;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid #3498db;
+        }
+
+        .metrics h4 {
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+
+        .code-snippet {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+
+        @media (max-width: 768px) {
+            .flow-row {
+                flex-direction: column;
+            }
+            .arrow {
+                transform: rotate(90deg);
+            }
+            .box {
+                margin: 8px 0;
+                min-width: 200px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Like System Architecture Evolution</h1>
+            <p>System Design Interview Visualization Guide</p>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 1: Single Database (MVP - 10K users)</h2>
+            <div class="diagram">
+                <div class="flow-row">
+                    <div class="box client">📱 Mobile Apps</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">⚖️ Load Balancer</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">🖥️ Web Server</div>
+                    <span class="arrow">→</span>
+                    <div class="box database">🗄️ MySQL</div>
+                </div>
+            </div>
+            <div class="metrics">
+                <h4>Bottlenecks:</h4>
+                • Single point of failure<br>
+                • COUNT(*) queries become slow<br>
+                • No geographic distribution
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 2: Read Replicas + Caching (100K users)</h2>
+            <div class="diagram">
+                <div class="flow-row">
+                    <div class="box client">📱 Mobile Apps</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">⚖️ Load Balancer</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">🖥️ Web Servers</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box cache">⚡ Redis Cache</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box database">🗄️ Master DB</div>
+                    <span class="arrow">←replicate→</span>
+                    <div class="box database">📖 Read Replicas</div>
+                </div>
+            </div>
+            <div class="metrics">
+                <h4>Improvements:</h4>
+                • Faster reads from cache<br>
+                • Reduced load on master<br>
+                <h4>Issues:</h4>
+                • Cache invalidation complexity<br>
+                • Replication lag
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 3: Denormalized Counters (1M users)</h2>
+            <div class="diagram">
+                <div class="flow-row">
+                    <div class="box client">📱 Apps</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">🖥️ App Servers</div>
+                    <span class="arrow">→</span>
+                    <div class="box cache">⚡ Redis</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box database">👥 Likes Table</div>
+                    <span class="arrow">+</span>
+                    <div class="box database">📊 Counter Table</div>
+                </div>
+            </div>
+            <div class="code-snippet">
+-- Optimized schema
+CREATE TABLE post_stats (
+    post_id BIGINT PRIMARY KEY,
+    like_count INT DEFAULT 0
+);
+            </div>
+            <div class="metrics">
+                <h4>Problems at Scale:</h4>
+                • Hot partition problem (viral posts)<br>
+                • Lock contention on popular posts
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 4: Sharding + Async Processing (10M users)</h2>
+            <div class="diagram">
+                <div class="flow-row">
+                    <div class="box client">📱 Apps</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">⚖️ Load Balancer</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">🖥️ App Servers</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box queue">📨 Message Queue</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">⚙️ Counter Workers</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box database">🗄️ Shard 1</div>
+                    <div class="box database">🗄️ Shard 2</div>
+                    <div class="box database">🗄️ Shard 3</div>
+                    <div class="box database">🗄️ Shard N</div>
+                </div>
+            </div>
+            <div class="metrics">
+                <h4>Benefits:</h4>
+                • Async processing prevents blocking<br>
+                • Horizontal scaling of database<br>
+                • Better fault isolation
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 5: Event Sourcing + CRDT (100M users)</h2>
+            <div class="diagram">
+                <div class="flow-row">
+                    <div class="box client">📱 Mobile Apps</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">🚪 API Gateway</div>
+                    <span class="arrow">→</span>
+                    <div class="box service">👍 Like Service</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box queue">🌊 Event Stream (Kafka)</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box service">📊 Counter Service</div>
+                    <div class="box service">📈 Analytics</div>
+                    <div class="box service">🔔 Notifications</div>
+                </div>
+                <div class="vertical-arrow">↓</div>
+                <div class="flow-row">
+                    <div class="box cache">⚡ Distributed Cache</div>
+                    <span class="arrow">+</span>
+                    <div class="box database">📊 Counter Shards</div>
+                </div>
+            </div>
+            <div class="metrics">
+                <h4>Key Features:</h4>
+                • CRDT counters for conflict-free merging<br>
+                • Event-driven architecture<br>
+                • Multiple consumers from single stream
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>Stage 6: Global Scale Multi-Region (1B users)</h2>
+            <div class="diagram">
+                <div class="region-container">
+                    <div class="region-header">🇺🇸 Region: US-East</div>
+                    <div class="flow-row">
+                        <div class="box client">📱 Apps</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">👍 Like Service</div>
+                        <span class="arrow">→</span>
+                        <div class="box queue">🌊 Kafka</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">📊 Counter Service</div>
+                    </div>
+                </div>
+
+                <div class="region-container">
+                    <div class="region-header">🇪🇺 Region: EU-West</div>
+                    <div class="flow-row">
+                        <div class="box client">📱 Apps</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">👍 Like Service</div>
+                        <span class="arrow">→</span>
+                        <div class="box queue">🌊 Kafka</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">📊 Counter Service</div>
+                    </div>
+                </div>
+
+                <div class="region-container">
+                    <div class="region-header">🌏 Region: Asia-Pacific</div>
+                    <div class="flow-row">
+                        <div class="box client">📱 Apps</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">👍 Like Service</div>
+                        <span class="arrow">→</span>
+                        <div class="box queue">🌊 Kafka</div>
+                        <span class="arrow">→</span>
+                        <div class="box service">📊 Counter Service</div>
+                    </div>
+                </div>
+
+                <div class="vertical-arrow">↓ ↓ ↓</div>
+
+                <div class="flow-row">
+                    <div class="box global">🌐 Global Aggregation Service</div>
+                </div>
+
+                <div class="vertical-arrow">↓</div>
+
+                <div class="flow-row">
+                    <div class="box global">⚡ Global Cache Layer</div>
+                </div>
+            </div>
+
+            <div class="code-snippet">
+# Regional CRDT Counter Merge
+class GlobalAggregator:
+    def merge_regional_counts(self, post_id):
+        us_count = get_regional_count('us-east', post_id)
+        eu_count = get_regional_count('eu-west', post_id) 
+        asia_count = get_regional_count('asia-pacific', post_id)
+        
+        # CRDT merge - conflict-free
+        return us_count.merge(eu_count).merge(asia_count)
+            </div>
+
+            <div class="metrics">
+                <h4>Global Scale Features:</h4>
+                • Regional independence (low latency)<br>
+                • Approximate counting for viral content<br>
+                • HyperLogLog for unique user counts<br>
+                • Cross-region eventual consistency<br>
+                • Automatic failover between regions
+            </div>
+        </div>
+
+        <div class="stage">
+            <h2>🎯 System Design Interview Key Points</h2>
+            <div class="metrics">
+                <h4>Design Decisions to Highlight:</h4>
+                <strong>1. Consistency Trade-off:</strong> Choose AP over C (eventual consistency OK for likes)<br>
+                <strong>2. Partitioning Strategy:</strong> Shard by post_id for even distribution<br>
+                <strong>3. Approximation:</strong> Use sampling for viral posts (>100K likes)<br>
+                <strong>4. Regional Architecture:</strong> Process locally, sync globally<br>
+                <strong>5. Failure Handling:</strong> Circuit breakers, fallbacks, monitoring
+            </div>
+
+            <div class="code-snippet">
+# Approximate counting for viral posts
+def increment_like_count(post_id, current_count):
+    if current_count < 1000:
+        return 1  # Exact counting
+    elif current_count < 100000:
+        return 10 if random() < 0.1 else 0  # Sample 10%
+    else:
+        return 100 if random() < 0.01 else 0  # Sample 1%
+            </div>
+        </div>
+    </div>
+</body>
+</html>
