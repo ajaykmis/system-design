@@ -1,0 +1,19 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: locking-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: lockdemo
+    command: [
+      "--binlog-format=ROW",
+      "--transaction-isolation=READ-COMMITTED"
+    ]
+    ports:
+      - "3306:3306"
+    volumes:
+      - lockdemo-data:/var/lib/mysql
+
+volumes:
+  lockdemo-data:
+

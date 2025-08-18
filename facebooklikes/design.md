@@ -78,7 +78,7 @@ class LikeService:
 - Cache invalidation complexity
 - Still counting individual rows
 - Master becomes write bottleneck
-- Replication lag affects consistency
+- Replication lag affects consistency ==> Master to Read Replica
 
 ---
 
