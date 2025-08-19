@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon DynamoDB Flow Analysis</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            background: linear-gradient(45deg, #FF9500, #FF6500);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            transform: perspective(1000px) rotateY(5deg);
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: perspective(1000px) rotateY(0deg) scale(1.05);
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .system {
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border: 3px solid transparent;
+            background-clip: padding-box;
+        }
+
+        .system.traditional {
+            border-image: linear-gradient(45deg, #ff6b6b, #feca57) 1;
+        }
+
+        .system.dynamo {
+            border-image: linear-gradient(45deg, #FF9500, #FF6500) 1;
+        }
+
+        .architecture {
+            margin: 20px 0;
+        }
+
+        .tier {
+            background: linear-gradient(90deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tier::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shine 3s infinite;
+        }
+
+        @keyframes shine {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        .tier.dynamo-ring {
+            background: linear-gradient(90deg, #FF9500, #FF6500);
+        }
+
+        .tier.storage {
+            background: linear-gradient(90deg, #a8edea 0%, #fed6e3 100%);
+            color: #333;
+        }
+
+        .ring-diagram {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .ring-visual {
+            width: 300px;
+            height: 300px;
+            border: 8px solid #FF9500;
+            border-radius: 50%;
+            margin: 20px auto;
+            position: relative;
+            background: linear-gradient(45deg, rgba(255, 149, 0, 0.1), rgba(255, 101, 0, 0.1));
+        }
+
+        .node {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            border-radius: 50%;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            transform: translate(-50%, -50%);
+            animation: pulse 3s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.1); }
+        }
+
+        .node:nth-child(1) { top: 20px; left: 50%; }
+        .node:nth-child(2) { top: 50%; right: 20px; }
+        .node:nth-child(3) { bottom: 20px; left: 50%; }
+        .node:nth-child(4) { top: 50%; left: 20px; }
+
+        .vector-clock {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid #FF9500;
+        }
+
+        .clock-entry {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 20px;
+            display: inline-block;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .performance-chart {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .metric {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .bar {
+            height: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .bar-traditional {
+            background: linear-gradient(90deg, #ff6b6b, #feca57);
+            width: 40%;
+        }
+
+        .bar-dynamo {
+            background: linear-gradient(90deg, #FF9500, #FF6500);
+            width: 95%;
+        }
+
+        .learning {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin: 15px 0;
+            position: relative;
+        }
+
+        .learning::before {
+            content: '💡';
+            position: absolute;
+            left: -10px;
+            top: -10px;
+            background: #ffd700;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .visual-flow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 30px 0;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .flow-step {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            flex: 1;
+            margin: 0 5px;
+            position: relative;
+            min-width: 120px;
+        }
+
+        .arrow {
+            font-size: 24px;
+            color: #FF9500;
+            animation: pulse-arrow 2s infinite;
+        }
+
+        @keyframes pulse-arrow {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        .technical-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .detail-card {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #FF9500;
+        }
+
+        .highlight {
+            background: linear-gradient(45deg, #ffd700, #ffed4e);
+            color: #333;
+            padding: 2px 8px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .operation-timeline {
+            background: rgba(0,0,0,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+
+        .timeline-step {
+            display: flex;
+            align-items: center;
+            background: rgba(255,255,255,0.9);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            border-left: 5px solid #FF9500;
+        }
+
+        .step-number {
+            background: #FF9500;
+            color: white;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-weight: bold;
+        }
+
+        .quorum-visual {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .quorum-node {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            position: relative;
+        }
+
+        .quorum-node.active {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            animation: glow 2s infinite;
+        }
+
+        .quorum-node.inactive {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
+            50% { box-shadow: 0 0 20px rgba(76, 175, 80, 0.8); }
+        }
+
+        .hinted-handoff {
+            background: linear-gradient(135deg, #FF6B35, #F7931E);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+
+        .handoff-flow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+
+        .handoff-node {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 5px;
+        }
+
+        .merkle-tree {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .tree-level {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+
+        .tree-node {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .tree-root {
+            background: linear-gradient(45deg, #FF9500, #FF6500);
+        }
+
+        .warning {
+            background: rgba(255, 152, 0, 0.1);
+            border: 1px solid #FF9800;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .success {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid #4CAF50;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔄 Amazon DynamoDB: Distributed Systems Architecture</h1>
+            <p>Deep dive into Amazon's highly available key-value storage system</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>99.9995%</h3>
+                <p>Successful Responses</p>
+            </div>
+            <div class="stat-card">
+                <h3>Zero</h3>
+                <p>Data Loss Events</p>
+            </div>
+            <div class="stat-card">
+                <h3>300ms</h3>
+                <p>99.9th Percentile SLA</p>
+            </div>
+            <div class="stat-card">
+                <h3>Millions</h3>
+                <p>Requests/Day Peak</p>
+            </div>
+        </div>
+
+        <h2>🏗️ Architecture Comparison</h2>
+        <div class="comparison">
+            <div class="system traditional">
+                <h3>❌ Traditional RDBMS</h3>
+                <div class="architecture">
+                    <div class="tier">Application Layer</div>
+                    <div class="tier">Database Connection Pool</div>
+                    <div class="tier storage">Primary Database Server</div>
+                    <div class="tier storage">Replica Database Servers</div>
+                </div>
+                
+                <h4>Limitations:</h4>
+                <ul>
+                    <li><span class="highlight">Strong Consistency</span> limits availability</li>
+                    <li><span class="highlight">Single Point of Failure</span></li>
+                    <li><span class="highlight">Complex Sharding</span> for scale</li>
+                    <li><span class="highlight">Network Partitions</span> cause outages</li>
+                </ul>
+            </div>
+
+            <div class="system dynamo">
+                <h3>✅ DynamoDB System</h3>
+                <div class="architecture">
+                    <div class="tier dynamo-ring">Peer-to-Peer Ring Architecture</div>
+                    <div class="tier dynamo-ring">Consistent Hashing + Virtual Nodes</div>
+                    <div class="tier dynamo-ring">Quorum-based Replication (N, R, W)</div>
+                    <div class="tier storage">Distributed Storage Nodes</div>
+                </div>
+                
+                <h4>Benefits:</h4>
+                <ul>
+                    <li><span class="highlight">Eventually Consistent</span> - always available</li>
+                    <li><span class="highlight">No Single Point of Failure</span></li>
+                    <li><span class="highlight">Automatic Scaling</span> via ring</li>
+                    <li><span class="highlight">Partition Tolerant</span></li>
+                </ul>
+            </div>
+        </div>
+
+        <h2>🔄 The DynamoDB Ring</h2>
+        <div class="ring-diagram">
+            <h3>Consistent Hashing Ring</h3>
+            <div class="ring-visual">
+                <div class="node">A</div>
+                <div class="node">B</div>
+                <div class="node">C</div>
+                <div class="node">D</div>
+            </div>
+            <p><strong>Key Concept:</strong> Each node is responsible for a range of the hash space</p>
+            <p><strong>Virtual Nodes:</strong> Each physical node maps to multiple positions for better load distribution</p>
+        </div>
+
+        <h2>📖 READ Operation Deep Dive</h2>
+        <div class="operation-timeline">
+            <div class="timeline-step">
+                <div class="step-number">1</div>
+                <div>
+                    <strong>Key Hashing & Ring Lookup</strong><br>
+                    <span style="color: #666;">MD5 hash determines position on ring → identifies preference list of N nodes</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">2</div>
+                <div>
+                    <strong>Coordinator Selection</strong><br>
+                    <span style="color: #666;">First healthy node in preference list becomes coordinator (or load balancer routes to any node)</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">3</div>
+                <div>
+                    <strong>Parallel Read Requests</strong><br>
+                    <span style="color: #666;">Coordinator sends read requests to N highest-ranked reachable nodes</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">4</div>
+                <div>
+                    <strong>Quorum Wait (R responses)</strong><br>
+                    <span style="color: #666;">Wait for minimum R responses before proceeding (typical R=2 for N=3)</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">5</div>
+                <div>
+                    <strong>Version Reconciliation</strong><br>
+                    <span style="color: #666;">Compare vector clocks, return causally unrelated versions to client if conflicts exist</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="success">
+            <h4>🎯 Read Performance Optimization</h4>
+            <p><strong>Read Repair:</strong> Coordinator updates stale replicas opportunistically after returning response to client</p>
+            <ul>
+                <li>Coordinator waits briefly for outstanding responses</li>
+                <li>Updates any nodes with stale versions</li>
+                <li>Reduces load on anti-entropy protocol</li>
+            </ul>
+        </div>
+
+        <h2>✍️ WRITE Operation Deep Dive</h2>
+        <div class="operation-timeline">
+            <div class="timeline-step">
+                <div class="step-number">1</div>
+                <div>
+                    <strong>Context & Vector Clock</strong><br>
+                    <span style="color: #666;">Client provides context from previous read, coordinator generates new vector clock</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">2</div>
+                <div>
+                    <strong>Local Write</strong><br>
+                    <span style="color: #666;">Coordinator writes new version locally with updated vector clock</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">3</div>
+                <div>
+                    <strong>Parallel Replication</strong><br>
+                    <span style="color: #666;">Send new version + vector clock to N highest-ranked reachable nodes</span>
+                </div>
+            </div>
+            
+            <div class="timeline-step">
+                <div class="step-number">4</div>
+                <div>
+                    <strong>Quorum Confirmation (W responses)</strong><br>
+                    <span style="color: #666;">Write considered successful when W-1 additional nodes respond (typical W=2)</span>
+                </div>
+            </div>
+        </div>
+
+        <h2>🔐 Vector Clocks & Versioning</h2>
+        <div class="vector-clock">
+            <h4>Example: Shopping Cart Version Evolution</h4>
+            <p><strong>D1:</strong> Initial cart creation</p>
+            <div class="clock-entry">[(Sx, 1)]</div>
+            <p><strong>D2:</strong> Add item (same coordinator)</p>
+            <div class="clock-entry">[(Sx, 2)]</div>
+            <p><strong>D3:</strong> Add another item (different coordinator)</p>
+            <div class="clock-entry">[(Sx, 2), (Sy, 1)]</div>
+            <p><strong>D4:</strong> Concurrent update from D2 (creates conflict)</p>
+            <div class="clock-entry">[(Sx, 2), (Sz, 1)]</div>
+            <p><strong>D5:</strong> Application reconciles D3 + D4</p>
+            <div class="clock-entry">[(Sx, 3), (Sy, 1), (Sz, 1)]</div>
+        </div>
+
+        <div class="warning">
+            <h4>⚖️ The Trade-off: Consistency vs Availability</h4>
+            <p>DynamoDB chooses <strong>availability over consistency</strong>. In network partitions or failures:</p>
+            <ul>
+                <li>Writes are never rejected (if at least one node available)</li>
+                <li>Multiple versions may exist temporarily</li>
+                <li>Application must handle conflict resolution</li>
+                <li>Example: Shopping cart merges all concurrent "add item" operations</li>
+            </ul>
+        </div>
+
+        <h2>🛡️ Handling Failures: Sloppy Quorum & Hinted Handoff</h2>
+        <div class="hinted-handoff">
+            <h4>Scenario: Node A is temporarily down</h4>
+            <div class="handoff-flow">
+                <div class="handoff-node">
+                    <strong>Normal:</strong><br>
+                    Write to A, B, C
+                </div>
+                <div class="arrow">→</div>
+                <div class="handoff-node">
+                    <strong>A Down:</strong><br>
+                    Write to D, B, C<br>
+                    <small>(D stores hint for A)</small>
+                </div>
+                <div class="arrow">→</div>
+                <div class="handoff-node">
+                    <strong>A Returns:</strong><br>
+                    D transfers data to A<br>
+                    <small>(Hint fulfilled)</small>
+                </div>
+            </div>
+            <p><strong>Key Benefit:</strong> Write availability maintained even when nodes fail</p>
+        </div>
+
+        <h2>⚡ Quorum System Configuration</h2>
+        <div class="performance-chart">
+            <div class="metric">
+                <h4>High Performance Read</h4>
+                <div class="quorum-visual">
+                    <div class="quorum-node active">1</div>
+                    <div class="quorum-node inactive">2</div>
+                    <div class="quorum-node inactive">3</div>
+                </div>
+                <p><strong>N=3, R=1, W=3</strong><br>Fast reads, slower writes</p>
+            </div>
+            <div class="metric">
+                <h4>Balanced Configuration</h4>
+                <div class="quorum-visual">
+                    <div class="quorum-node active">1</div>
+                    <div class="quorum-node active">2</div>
+                    <div class="quorum-node inactive">3</div>
+                </div>
+                <p><strong>N=3, R=2, W=2</strong><br>Most common production setup</p>
+            </div>
+            <div class="metric">
+                <h4>High Availability Write</h4>
+                <div class="quorum-visual">
+                    <div class="quorum-node active">1</div>
+                    <div class="quorum-node inactive">2</div>
+                    <div class="quorum-node inactive">3</div>
+                </div>
+                <p><strong>N=3, R=3, W=1</strong><br>Always writeable, eventual consistency</p>
+            </div>
+        </div>
+
+        <h2>🔄 Anti-Entropy: Merkle Trees</h2>
+        <div class="merkle-tree">
+            <h4>Efficient Replica Synchronization</h4>
+            <div class="tree-level">
+                <div class="tree-node tree-root">Root Hash</div>
+            </div>
+            <div class="tree-level">
+                <div class="tree-node">Hash L</div>
+                <div class="tree-node">Hash R</div>
+            </div>
+            <div class="tree-level">
+                <div class="tree-node">Hash A</div>
+                <div class="tree-node">Hash B</div>
+                <div class="tree-node">Hash C</div>
+                <div class="tree-node">Hash D</div>
+            </div>
+            <div class="tree-level">
+                <div class="tree-node">Key1</div>
+                <div class="tree-node">Key2</div>
+                <div class="tree-node">Key3</div>
+                <div class="tree-node">Key4</div>
+            </div>
+            <p><strong>Advantage:</strong> Compare root hashes first - if equal, no sync needed</p>
+            <p><strong>Process:</strong> Traverse tree to identify exact keys that differ</p>
+        </div>
+
+        <h2>📊 Performance Analysis</h2>
+        <div class="performance-chart">
+            <div class="metric">
+                <h4>Availability</h4>
+                <div style="text-align: left;">
+                    <p>Traditional:</p>
+                    <div class="bar bar-traditional"></div>
+                    <p>DynamoDB:</p>
+                    <div class="bar bar-dynamo"></div>
+                </div>
+                <p><strong>99.9995% Uptime</strong></p>
+            </div>
+            <div class="metric">
+                <h4>Scalability</h4>
+                <div style="text-align: left;">
+                    <p>Traditional:</p>
+                    <div class="bar bar-traditional"></div>
+                    <p>DynamoDB:</p>
+                    <div class="bar bar-dynamo"></div>
+                </div>
+                <p><strong>Incremental Node Addition</strong></p>
+            </div>
+            <div class="metric">
+                <h4>Partition Tolerance</h4>
+                <div style="text-align: left;">
+                    <p>Traditional:</p>
+                    <div class="bar bar-traditional"></div>
+                    <p>DynamoDB:</p>
+                    <div class="bar bar-dynamo"></div>
+                </div>
+                <p><strong>Continues Operating</strong></p>
+            </div>
+        </div>
+
+        <h2>🎯 Key Learnings & Design Principles</h2>
+        
+        <div class="learning">
+            <h4>Eventual Consistency Enables Availability</h4>
+            <p>By relaxing consistency requirements, DynamoDB can remain available during network partitions and node failures. The system prioritizes customer experience over perfect consistency.</p>
+        </div>
+
+        <div class="learning">
+            <h4>Application-Level Conflict Resolution</h4>
+            <p>Rather than rejecting conflicting writes, DynamoDB pushes conflict resolution to the application layer. This enables business logic-aware reconciliation (e.g., merging shopping carts).</p>
+        </div>
+
+        <div class="learning">
+            <h4>Symmetric Peer-to-Peer Architecture</h4>
+            <p>Every node has the same responsibilities. There are no master nodes or coordinators, simplifying operations and eliminating single points of failure.</p>
+        </div>
+
+        <div class="learning">
+            <h4>Tunable CAP Theorem Trade-offs</h4>
+            <p>The (N, R, W) configuration allows each application to tune its consistency, availability, and performance characteristics based on business requirements.</p>
+        </div>
+
+        <div class="learning">
+            <h4>Gossip Protocol for Membership</h4>
+            <p>Nodes discover each other through gossip, creating a self-organizing system that adapts to node additions and failures without central coordination.</p>
+        </div>
+
+        <h2>🚀 Request Flow Comparison</h2>
+        
+        <h3>❌ Traditional Database Flow:</h3>
+        <div class="visual-flow">
+            <div class="flow-step">Client Request</div>
+            <div class="arrow">→</div>
+            <div class="flow-step">Load Balancer</div>
+            <div class="arrow">→</div>
+            <div class="flow-step">Primary DB<br><small>Single point</small></div>
+            <div class="arrow">→</div>
