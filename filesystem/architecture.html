@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed File System Architecture</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        
+        .diagram-section {
+            margin: 40px 0;
+            padding: 20px;
+            border-radius: 15px;
+            background: linear-gradient(145deg, #f8f9ff, #e8ebff);
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.05);
+        }
+        
+        .diagram-title {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #2d3748;
+            text-align: center;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .diagram {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin: 20px 0;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .diagram::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        
+        .component {
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 15px;
+            margin: 10px;
+            display: inline-block;
+            min-width: 120px;
+            text-align: center;
+            background: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .component:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        
+        .client { 
+            background: linear-gradient(135deg, #4facfe, #00f2fe); 
+            color: white; 
+            border-color: #4facfe;
+        }
+        .gateway { 
+            background: linear-gradient(135deg, #fa709a, #fee140); 
+            color: white; 
+            border-color: #fa709a;
+        }
+        .metadata { 
+            background: linear-gradient(135deg, #a8edea, #fed6e3); 
+            color: #2d3748; 
+            border-color: #a8edea;
+        }
+        .data { 
+            background: linear-gradient(135deg, #ff9a9e, #fecfef); 
+            color: #2d3748; 
+            border-color: #ff9a9e;
+        }
+        .coordination { 
+            background: linear-gradient(135deg, #c2e9fb, #a1c4fd); 
+            color: #2d3748; 
+            border-color: #c2e9fb;
+        }
+        
+        .arrow {
+            display: inline-block;
+            margin: 0 15px;
+            font-size: 1.5rem;
+            color: #667eea;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .flow-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .raft-group {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 15px;
+            background: rgba(102, 126, 234, 0.05);
+            position: relative;
+        }
+        
+        .raft-group::before {
+            content: attr(data-label);
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .datacenter {
+            border: 2px solid #4a5568;
+            border-radius: 20px;
+            padding: 30px;
+            margin: 20px;
+            background: linear-gradient(145deg, #f7fafc, #edf2f7);
+            position: relative;
+        }
+        
+        .datacenter::before {
+            content: attr(data-label);
+            position: absolute;
+            top: -15px;
+            left: 30px;
+            background: #4a5568;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        
+        .sequence-step {
+            background: linear-gradient(135deg, #ffecd2, #fcb69f);
+            border: 2px solid #fcb69f;
+            border-radius: 10px;
+            padding: 12px 20px;
+            margin: 8px 0;
+            position: relative;
+            padding-left: 50px;
+        }
+        
+        .sequence-step::before {
+            content: attr(data-step);
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #fc8500;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+        
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(255,255,255,0.7);
+            border-radius: 10px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 20px;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+        }
+        
+        .note {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-style: italic;
+            position: relative;
+        }
+        
+        .note::before {
+            content: "💡";
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; font-size: 2.5rem; margin-bottom: 10px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            Distributed File System Architecture
+        </h1>
+        <p style="text-align: center; color: #666; font-size: 1.1rem; margin-bottom: 40px;">
+            Strongly Consistent File System with Hierarchical Namespace
+        </p>
+
+        <!-- High-Level Architecture -->
+        <div class="diagram-section">
+            <div class="diagram-title">High-Level System Architecture</div>
+            <div class="diagram">
+                <div class="flow-container">
+                    <div class="component client">Client Applications</div>
+                    <span class="arrow">→</span>
+                    <div class="component gateway">Client Gateway</div>
+                    <span class="arrow">→</span>
+                    <div class="component metadata">Metadata Service</div>
+                </div>
+                <div class="flow-container">
+                    <div class="component coordination">Coordination Layer<br/>(Raft Consensus)</div>
+                    <span class="arrow">↕</span>
+                    <div class="component data">Data Storage Service</div>
+                </div>
+                
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, #4facfe, #00f2fe);"></div>
+                        <span>Client Layer</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, #fa709a, #fee140);"></div>
+                        <span>Gateway/Proxy</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, #a8edea, #fed6e3);"></div>
+                        <span>Metadata Management</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, #c2e9fb, #a1c4fd);"></div>
+                        <span>Consensus/Coordination</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, #ff9a9e, #fecfef);"></div>
+                        <span>Data Storage</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metadata Service Detail -->
+        <div class="diagram-section">
+            <div class="diagram-title">Metadata Service - Raft Groups Architecture</div>
+            <div class="diagram">
+                <div class="datacenter" data-label="Datacenter 1">
+                    <div class="raft-group" data-label="Raft Group A (/users/*)">
+                        <div class="component metadata" style="border-color: #10b981; background: linear-gradient(135deg, #10b981, #059669); color: white;">Leader</div>
+                        <div class="component metadata">Follower</div>
+                    </div>
+                    <div class="raft-group" data-label="Raft Group B (/projects/*)">
+                        <div class="component metadata">Follower</div>
+                        <div class="component metadata">Follower</div>
+                    </div>
+                </div>
+                
+                <div class="datacenter" data-label="Datacenter 2">
+                    <div class="raft-group" data-label="Raft Group A (/users/*)">
+                        <div class="component metadata">Follower</div>
+                    </div>
+                    <div class="raft-group" data-label="Raft Group B (/projects/*)">
+                        <div class="component metadata" style="border-color: #10b981; background: linear-gradient(135deg, #10b981, #059669); color: white;">Leader</div>
+                        <div class="component metadata">Follower</div>
+                    </div>
+                </div>
+                
+                <div class="note">
+                    Each Raft group manages a subtree of the namespace. Leaders handle all writes and coordinate with followers for strong consistency.
+                </div>
+            </div>
+        </div>
+
+        <!-- Write Operation Flow -->
+        <div class="diagram-section">
+            <div class="diagram-title">Write Operation Sequence (Two-Phase Commit)</div>
+            <div class="diagram">
+                <div class="sequence-step" data-step="1">
+                    <strong>Reserve Phase:</strong> Client → Gateway → Metadata Leader reserves path in Raft log (uncommitted)
+                </div>
+                <div class="sequence-step" data-step="2">
+                    <strong>Data Upload:</strong> Client uploads file content to assigned data nodes
+                </div>
+                <div class="sequence-step" data-step="3">
+                    <strong>Confirmation:</strong> Data nodes confirm successful storage with checksums
+                </div>
+                <div class="sequence-step" data-step="4">
+                    <strong>Commit Phase:</strong> Metadata Leader commits entry in Raft log across majority
+                </div>
+                <div class="sequence-step" data-step="5">
+                    <strong>Visibility:</strong> File now appears in list operations immediately
+                </div>
+                
+                <div class="flow-container" style="margin-top: 30px;">
+                    <div class="component client">Client</div>
+                    <span class="arrow">→</span>
+                    <div class="component gateway">Gateway</div>
+                    <span class="arrow">→</span>
+                    <div class="component metadata">Metadata Leader</div>
+                    <span class="arrow">→</span>
+                    <div class="component coordination">Raft Consensus</div>
+                    <span class="arrow">→</span>
+                    <div class="component data">Data Nodes</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Read/List Operation Flow -->
+        <div class="diagram-section">
+            <div class="diagram-title">List Operation Flow (Strongly Consistent Reads)</div>
+            <div class="diagram">
+                <div class="flow-container">
+                    <div class="component client">Client LIST /users/john/</div>
+                    <span class="arrow">→</span>
+                    <div class="component gateway">Gateway<br/>(Route by path hash)</div>
+                    <span class="arrow">→</span>
+                    <div class="component metadata">Metadata Leader<br/>Raft Group A</div>
+                </div>
+                
+                <div style="margin: 30px 0; padding: 20px; background: rgba(16, 185, 129, 0.1); border-left: 4px solid #10b981; border-radius: 8px;">
+                    <strong>Consistency Guarantee:</strong> All reads go to Raft leader or followers with read-after-write consistency. 
+                    No stale data is ever returned for list operations.
+                </div>
+                
+                <div class="flow-container">
+                    <div class="component metadata">Response:<br/>file1.txt (v1)<br/>file2.pdf (v1)<br/>subdirectory/</div>
+                    <span class="arrow">←</span>
+                    <div class="component gateway">Gateway</div>
+                    <span class="arrow">←</span>
+                    <div class="component client">Client</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Storage Architecture -->
+        <div class="diagram-section">
+            <div class="diagram-title">Data Storage Layer Architecture</div>
+            <div class="diagram">
+                <div class="datacenter" data-label="Hot Tier (3x Replication)">
+                    <div class="flow-container">
+                        <div class="component data">Data Node 1<br/>SHA256: abc123...</div>
+                        <div class="component data">Data Node 2<br/>SHA256: abc123...</div>
+                        <div class="component data">Data Node 3<br/>SHA256: abc123...</div>
+                    </div>
+                </div>
+                
+                <div class="datacenter" data-label="Cold Tier (Erasure Coding 10+4)">
+                    <div class="flow-container">
+                        <div class="component data" style="font-size: 0.9rem;">Shard 1</div>
+                        <div class="component data" style="font-size: 0.9rem;">Shard 2</div>
+                        <div class="component data" style="font-size: 0.9rem;">...</div>
+                        <div class="component data" style="font-size: 0.9rem;">Shard 10</div>
+                        <div class="component data" style="background: linear-gradient(135deg, #fbbf24, #f59e0b); color: white;">Parity 1</div>
+                        <div class="component data" style="background: linear-gradient(135deg, #fbbf24, #f59e0b); color: white;">Parity 4</div>
+                    </div>
+                </div>
+                
+                <div class="note">
+                    Content-addressable storage with automatic deduplication. Hot data uses 3x replication for performance, cold data uses erasure coding for cost efficiency.
+                </div>
+            </div>
+        </div>
+
+        <!-- Failure Handling -->
+        <div class="diagram-section">
+            <div class="diagram-title">Failure Handling & Partition Tolerance</div>
+            <div class="diagram">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin: 20px 0;">
+                    <div style="padding: 20px; background: rgba(239, 68, 68, 0.1); border: 2px solid #ef4444; border-radius: 10px;">
+                        <h4 style="color: #ef4444; margin-top: 0;">Network Partition Scenario</h4>
+                        <div class="datacenter" data-label="DC1 (Majority)" style="border-color: #10b981;">
+                            <div class="component metadata" style="background: linear-gradient(135deg, #10b981, #059669); color: white;">Leader ✓</div>
+                            <div class="component metadata" style="background: linear-gradient(135deg, #10b981, #059669); color: white;">Follower ✓</div>
+                            <p style="text-align: center; color: #10b981; font-weight: bold;">Accepts Writes</p>
+                        </div>
+                        <div class="datacenter" data-label="DC2 (Minority)" style="border-color: #ef4444;">
+                            <div class="component metadata" style="background: #ef4444; color: white;">Follower ✗</div>
+                            <p style="text-align: center; color: #ef4444; font-weight: bold;">Read-Only</p>
+                        </div>
+                    </div>
+                    
+                    <div style="padding: 20px; background: rgba(16, 185, 129, 0.1); border: 2px solid #10b981; border-radius: 10px;">
+                        <h4 style="color: #10b981; margin-top: 0;">Recovery Process</h4>
+                        <div class="sequence-step" data-step="1" style="background: rgba(16, 185, 129, 0.1); border-color: #10b981;">
+                            Partition heals, follower reconnects
+                        </div>
+                        <div class="sequence-step" data-step="2" style="background: rgba(16, 185, 129, 0.1); border-color: #10b981;">
+                            Raft log replay catches up follower
+                        </div>
+                        <div class="sequence-step" data-step="3" style="backgroun
