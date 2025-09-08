@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snapchat Message Creation & Delivery Flow</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #FFFC00;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            text-shadow: 0 0 20px rgba(255, 252, 0, 0.3);
+        }
+        
+        .diagram-container {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .flow-diagram {
+            flex: 2;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d30 50%, #1a1a1a 100%);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        
+        .schemas {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow-y: auto;
+            max-height: 1400px;
+            min-height: 1200px;
+        }
+        
+        .schema-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            border-left: 4px solid #FFFC00;
+        }
+        
+        .schema-section h3 {
+            color: #4ECDC4;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+        }
+        
+        .schema-code {
+            background: #1a1a1a;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .json-key { color: #4ECDC4; }
+        .json-string { color: #98D982; }
+        .json-number { color: #F7DC6F; }
+        .json-boolean { color: #E74C3C; }
+        
+        svg {
+            width: 100%;
+            height: 1200px;
+        }
+        
+        .step-number {
+            fill: #FFFC00;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        .step-box {
+            fill: rgba(255, 252, 0, 0.1);
+            stroke: #FFFC00;
+            stroke-width: 2;
+            rx: 8;
+        }
+        
+        .component-box {
+            stroke: #fff;
+            stroke-width: 2;
+            rx: 8;
+        }
+        
+        .flow-arrow {
+            stroke: #FFFC00;
+            stroke-width: 3;
+            marker-end: url(#arrowhead);
+            opacity: 0.8;
+        }
+        
+        .data-flow {
+            stroke: #4ECDC4;
+            stroke-width: 2;
+            stroke-dasharray: 5,5;
+            marker-end: url(#arrowhead-blue);
+        }
+        
+        .async-flow {
+            stroke: #E74C3C;
+            stroke-width: 2;
+            stroke-dasharray: 10,5;
+            marker-end: url(#arrowhead-red);
+        }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .legend-line {
+            width: 30px;
+            height: 3px;
+        }
+        
+        .sync-flow { background: #FFFC00; }
+        .data-sync { background: #4ECDC4; }
+        .async-event { background: #E74C3C; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Snapchat Message Creation & Delivery Flow</h1>
+        
+        <div class="diagram-container">
+            <div class="flow-diagram">
+                <svg viewBox="0 0 1000 1200" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <!-- Arrow markers -->
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#FFFC00" />
+                        </marker>
+                        <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#4ECDC4" />
+                        </marker>
+                        <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#E74C3C" />
+                        </marker>
+                        
+                        <!-- Glowing effect -->
+                        <filter id="glow">
+                            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                            <feMerge> 
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                    </defs>
+                    
+                    <!-- Step 1: Message Creation -->
+                    <rect x="50" y="50" width="200" height="60" class="step-box"/>
+                    <text x="60" y="70" class="step-number">1</text>
+                    <text x="150" y="75" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">User Creates Message</text>
+                    <text x="150" y="95" text-anchor="middle" fill="#fff" font-size="12">Mobile/Web Client</text>
+                    
+                    <!-- Step 2: Client Processing -->
+                    <rect x="300" y="50" width="200" height="60" fill="#FF6B6B" class="component-box"/>
+                    <text x="400" y="75" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Client Message Prep</text>
+                    <text x="400" y="95" text-anchor="middle" fill="#fff" font-size="11">Validation, Encryption</text>
+                    
+                    <!-- Step 3: API Gateway -->
+                    <rect x="550" y="50" width="200" height="60" fill="#4ECDC4" class="component-box"/>
+                    <text x="650" y="75" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">API Gateway</text>
+                    <text x="650" y="95" text-anchor="middle" fill="#fff" font-size="11">Auth, Rate Limiting</text>
+                    
+                    <!-- Step 4: Message Service -->
+                    <rect x="50" y="170" width="200" height="80" class="step-box"/>
+                    <text x="60" y="190" class="step-number">2</text>
+                    <text x="150" y="195" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Message Service</text>
+                    <text x="150" y="215" text-anchor="middle" fill="#fff" font-size="11">• Generate Message ID</text>
+                    <text x="150" y="230" text-anchor="middle" fill="#fff" font-size="11">• Add Metadata</text>
+                    <text x="150" y="245" text-anchor="middle" fill="#fff" font-size="11">• Validate Recipients</text>
+                    
+                    <!-- Step 5: Kafka Producer -->
+                    <rect x="300" y="170" width="200" height="80" fill="#45B7D1" class="component-box" filter="url(#glow)"/>
+                    <text x="400" y="195" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Kafka Producer</text>
+                    <text x="400" y="215" text-anchor="middle" fill="#fff" font-size="11">• Partition by ChatID</text>
+                    <text x="400" y="230" text-anchor="middle" fill="#fff" font-size="11">• Guaranteed Delivery</text>
+                    <text x="400" y="245" text-anchor="middle" fill="#fff" font-size="11">Topic: messages</text>
+                    
+                    <!-- Step 6: DynamoDB Write -->
+                    <rect x="550" y="170" width="200" height="80" fill="#96CEB4" class="component-box"/>
+                    <text x="650" y="195" text-anchor="middle" fill="#333" font-weight="bold" font-size="14">DynamoDB</text>
+                    <text x="650" y="215" text-anchor="middle" fill="#333" font-size="11">• Store Message</text>
+                    <text x="650" y="230" text-anchor="middle" fill="#333" font-size="11">• Update Chat</text>
+                    <text x="650" y="245" text-anchor="middle" fill="#333" font-size="11">Table: Messages</text>
+                    
+                    <!-- Kafka Cluster -->
+                    <rect x="150" y="310" width="300" height="100" fill="#45B7D1" class="component-box" filter="url(#glow)"/>
+                    <text x="300" y="340" text-anchor="middle" fill="#fff" font-weight="bold" font-size="16">Kafka Cluster</text>
+                    <text x="200" y="365" text-anchor="middle" fill="#fff" font-size="12">messages</text>
+                    <text x="300" y="365" text-anchor="middle" fill="#fff" font-size="12">delivery-status</text>
+                    <text x="400" y="365" text-anchor="middle" fill="#fff" font-size="12">ephemeral-jobs</text>
+                    <text x="300" y="385" text-anchor="middle" fill="#fff" font-size="11">Partitioned by chat_id</text>
+                    <text x="300" y="400" text-anchor="middle" fill="#fff" font-size="11">Replication Factor: 3</text>
+                    
+                    <!-- Consumer Services -->
+                    <rect x="50" y="460" width="150" height="80" class="step-box"/>
+                    <text x="60" y="480" class="step-number">3</text>
+                    <text x="125" y="485" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Delivery Service</text>
+                    <text x="125" y="505" text-anchor="middle" fill="#fff" font-size="11">• WebSocket Push</text>
+                    <text x="125" y="520" text-anchor="middle" fill="#fff" font-size="11">• Connection Mgmt</text>
+                    <text x="125" y="535" text-anchor="middle" fill="#fff" font-size="11">Consumer Group</text>
+                    
+                    <rect x="230" y="460" width="150" height="80" fill="#FFEAA7" class="component-box"/>
+                    <text x="305" y="485" text-anchor="middle" fill="#333" font-weight="bold" font-size="14">Media Service</text>
+                    <text x="305" y="505" text-anchor="middle" fill="#333" font-size="11">• Process Media</text>
+                    <text x="305" y="520" text-anchor="middle" fill="#333" font-size="11">• Generate URLs</text>
+                    <text x="305" y="535" text-anchor="middle" fill="#333" font-size="11">Consumer Group</text>
+                    
+                    <rect x="410" y="460" width="150" height="80" fill="#DDA0DD" class="component-box"/>
+                    <text x="485" y="485" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Ephemeral Mgr</text>
+                    <text x="485" y="505" text-anchor="middle" fill="#fff" font-size="11">• Schedule Delete</text>
+                    <text x="485" y="520" text-anchor="middle" fill="#fff" font-size="11">• TTL Management</text>
+                    <text x="485" y="535" text-anchor="middle" fill="#fff" font-size="11">Consumer Group</text>
+                    
+                    <rect x="590" y="460" width="150" height="80" fill="#E74C3C" class="component-box"/>
+                    <text x="665" y="485" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Push Service</text>
+                    <text x="665" y="505" text-anchor="middle" fill="#fff" font-size="11">• FCM/APNS</text>
+                    <text x="665" y="520" text-anchor="middle" fill="#fff" font-size="11">• Offline Users</text>
+                    <text x="665" y="535" text-anchor="middle" fill="#fff" font-size="11">Consumer Group</text>
+                    
+                    <!-- Step 7: WebSocket Delivery -->
+                    <rect x="50" y="590" width="200" height="80" class="step-box"/>
+                    <text x="60" y="610" class="step-number">4</text>
+                    <text x="150" y="615" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">WebSocket Manager</text>
+                    <text x="150" y="635" text-anchor="middle" fill="#fff" font-size="11">• Find Recipients</text>
+                    <text x="150" y="650" text-anchor="middle" fill="#fff" font-size="11">• Real-time Push</text>
+                    <text x="150" y="665" text-anchor="middle" fill="#fff" font-size="11">Connection Pool</text>
+                    
+                    <!-- Step 8: Client Delivery -->
+                    <rect x="300" y="590" width="200" height="80" fill="#FF6B6B" class="component-box"/>
+                    <text x="400" y="615" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Recipient Clients</text>
+                    <text x="400" y="635" text-anchor="middle" fill="#fff" font-size="11">• Receive Message</text>
+                    <text x="400" y="650" text-anchor="middle" fill="#fff" font-size="11">• Decrypt Content</text>
+                    <text x="400" y="665" text-anchor="middle" fill="#fff" font-size="11">• Update UI</text>
+                    
+                    <!-- Step 9: Delivery Confirmation -->
+                    <rect x="550" y="590" width="200" height="80" class="step-box"/>
+                    <text x="560" y="610" class="step-number">5</text>
+                    <text x="650" y="615" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Delivery Tracking</text>
+                    <text x="650" y="635" text-anchor="middle" fill="#fff" font-size="11">• Ack Messages</text>
+                    <text x="650" y="650" text-anchor="middle" fill="#fff" font-size="11">• Update Status</text>
+                    <text x="650" y="665" text-anchor="middle" fill="#fff" font-size="11">• Notify Sender</text>
+                    
+                    <!-- Redis Cache -->
+                    <rect x="50" y="720" width="150" height="60" fill="#E74C3C" class="component-box"/>
+                    <text x="125" y="745" text-anchor="middle" fill="#fff" font-weight="bold" font-size="14">Redis Cache</text>
+                    <text x="125" y="765" text-anchor="middle" fill="#fff" font-size="11">Connection States</text>
+                    
+                    <!-- PostgreSQL -->
+                    <rect x="230" y="720" width="150" height="60" fill="#96CEB4" class="component-box"/>
+                    <text x="305" y="745" text-anchor="middle" fill="#333" font-weight="bold" font-size="14">PostgreSQL</text>
+                    <text x="305" y="765" text-anchor="middle" fill="#333" font-size="11">User Sessions</text>
+                    
+                    <!-- S3 Storage -->
+                    <rect x="410" y="720" width="150" height="60" fill="#96CEB4" class="component-box"/>
+                    <text x="485" y="745" text-anchor="middle" fill="#333" font-weight="bold" font-size="14">S3 Storage</text>
+                    <text x="485" y="765" text-anchor="middle" fill="#333" font-size="11">Media Files</text>
+                    
+                    <!-- Flow Arrows -->
+                    <!-- Horizontal flows -->
+                    <line x1="250" y1="80" x2="300" y2="80" class="flow-arrow"/>
+                    <line x1="500" y1="80" x2="550" y2="80" class="flow-arrow"/>
+                    
+                    <!-- Vertical flows -->
+                    <line x1="400" y1="110" x2="400" y2="170" class="flow-arrow"/>
+                    <line x1="150" y1="110" x2="150" y2="170" class="flow-arrow"/>
+                    <line x1="650" y1="110" x2="650" y2="170" class="flow-arrow"/>
+                    
+                    <!-- To Kafka -->
+                    <line x1="400" y1="250" x2="400" y2="310" class="flow-arrow"/>
+                    <line x1="150" y1="250" x2="200" y2="310" class="flow-arrow"/>
+                    <line x1="650" y1="250" x2="400" y2="310" class="data-flow"/>
+                    
+                    <!-- From Kafka to Consumers -->
+                    <line x1="200" y1="410" x2="125" y2="460" class="async-flow"/>
+                    <line x1="250" y1="410" x2="305" y2="460" class="async-flow"/>
+                    <line x1="350" y1="410" x2="485" y2="460" class="async-flow"/>
+                    <line x1="400" y1="410" x2="665" y2="460" class="async-flow"/>
+                    
+                    <!-- Delivery flow -->
+                    <line x1="125" y1="540" x2="150" y2="590" class="flow-arrow"/>
+                    <line x1="250" y1="630" x2="300" y2="630" class="flow-arrow"/>
+                    <line x1="500" y1="630" x2="550" y2="630" class="flow-arrow"/>
+                    
+                    <!-- To storage -->
+                    <line x1="125" y1="670" x2="125" y2="720" class="data-flow"/>
+                    <line x1="150" y1="670" x2="305" y2="720" class="data-flow"/>
+                    <line x1="305" y1="540" x2="485" y2="720" class="data-flow"/>
+                    
+                    <!-- Status tracking -->
+                    <path d="M 650 670 Q 750 700 750 400 Q 750 300 400 300" stroke="#4ECDC4" stroke-width="2" fill="none" marker-end="url(#arrowhead-blue)" stroke-dasharray="5,5"/>
+                    
+                    <!-- Timing indicators -->
+                    <text x="780" y="80" fill="#FFFC00" font-size="12">~5ms</text>
+                    <text x="780" y="210" fill="#FFFC00" font-size="12">~10ms</text>
+                    <text x="520" y="350" fill="#FFFC00" font-size="12">~1-2ms</text>
+                    <text x="780" y="630" fill="#FFFC00" font-size="12">~15ms</text>
+                    
+                    <!-- Total latency -->
+                    <rect x="800" y="500" width="180" height="60" fill="rgba(255, 252, 0, 0.1)" stroke="#FFFC00" stroke-width="2" rx="8"/>
+                    <text x="890" y="520" text-anchor="middle" fill="#FFFC00" font-weight="bold" font-size="14">Total Latency</text>
+                    <text x="890" y="540" text-anchor="middle" fill="#FFFC00" font-size="18">~30-50ms</text>
+                    <text x="890" y="555" text-anchor="middle" fill="#fff" font-size="11">End-to-End</text>
+                </svg>
+            </div>
+            
+            <div class="schemas">
+                <div class="schema-section">
+                    <h3>Message Format (Kafka)</h3>
+                    <div class="schema-code">{
+  <span class="json-key">"messageId"</span>: <span class="json-string">"msg_abc123def456"</span>,
+  <span class="json-key">"chatId"</span>: <span class="json-string">"chat_xyz789"</span>,
+  <span class="json-key">"senderId"</span>: <span class="json-string">"user_12345"</span>,
+  <span class="json-key">"recipientIds"</span>: [<span class="json-string">"user_67890"</span>],
+  <span class="json-key">"messageType"</span>: <span class="json-string">"TEXT"</span>,
+  <span class="json-key">"content"</span>: {
+    <span class="json-key">"encrypted"</span>: <span class="json-string">"aGVsbG8gd29ybGQ="</span>,
+    <span class="json-key">"keyId"</span>: <span class="json-string">"key_789"</span>
+  },
+  <span class="json-key">"metadata"</span>: {
+    <span class="json-key">"timestamp"</span>: <span class="json-number">1704067200000</span>,
+    <span class="json-key">"clientVersion"</span>: <span class="json-string">"12.15.0"</span>,
+    <span class="json-key">"platform"</span>: <span class="json-string">"iOS"</span>
+  },
+  <span class="json-key">"ephemeralSettings"</span>: {
+    <span class="json-key">"ttlSeconds"</span>: <span class="json-number">86400</span>,
+    <span class="json-key">"deleteAfterView"</span>: <span class="json-boolean">false</span>,
+    <span class="json-key">"screenshotNotify"</span>: <span class="json-boolean">true</span>
+  },
+  <span class="json-key">"deliverySettings"</span>: {
+    <span class="json-key">"priority"</span>: <span class="json-string">"HIGH"</span>,
+    <span class="json-key">"retryCount"</span>: <span class="json-number">0</span>,
+    <span class="json-key">"maxRetries"</span>: <span class="json-number">3</span>
+  }
+}</div>
+                </div>
+                
+                <div class="schema-section">
+                    <h3>Media Message Format</h3>
+                    <div class="schema-code">{
+  <span class="json-key">"messageId"</span>: <span class="json-string">"msg_media789"</span>,
+  <span class="json-key">"chatId"</span>: <span class="json-string">"chat_xyz789"</span>,
+  <span class="json-key">"senderId"</span>: <span class="json-string">"user_12345"</span>,
+  <span class="json-key">"messageType"</span>: <span class="json-string">"IMAGE"</span>,
+  <span class="json-key">"content"</span>: {
+    <span class="json-key">"mediaId"</span>: <span class="json-string">"media_abc123"</span>,
+    <span class="json-key">"thumbnailUrl"</span>: <span class="json-string">"https://cdn.../thumb.jpg"</span>,
+    <span class="json-key">"fullUrl"</span>: <span class="json-string">"https://cdn.../full.jpg"</span>,
+    <span class="json-key">"dimensions"</span>: {
+      <span class="json-key">"width"</span>: <span class="json-number">1080</span>,
+      <span class="json-key">"height"</span>: <span class="json-number">1920</span>
+    },
+    <span class="json-key">"fileSize"</span>: <span class="json-number">2048576</span>,
+    <span class="json-key">"mimeType"</span>: <span class="json-string">"image/jpeg"</span>
+  },
+  <span class="json-key">"processing"</span>: {
+    <span class="json-key">"status"</span>: <span class="json-string">"COMPLETED"</span>,
+    <span class="json-key">"compressionRatio"</span>: <span class="json-number">0.75</span>
+  }
+}</div>
+                </div>
+                
+                <div class="schema-section">
+                    <h3>DynamoDB Messages Table</h3>
+                    <div class="schema-code">Table: <span class="json-string">Messages</span>
+
+<span class="json-key">Partition Key:</span> <span class="json-string">chatId</span> (String)
+<span class="json-key">Sort Key:</span> <span class="json-string">timestamp#messageId</span> (String)
+
+<span class="json-key">Attributes:</span>
+{
+  <span class="json-key">"chatId"</span>: <span class="json-string">"chat_xyz789"</span>,
+  <span class="json-key">"timestamp#messageId"</span>: <span class="json-string">"1704067200000#msg_abc123"</span>,
+  <span class="json-key">"messageId"</span>: <span class="json-string">"msg_abc123def456"</span>,
+  <span class="json-key">"senderId"</span>: <span class="json-string">"user_12345"</span>,
+  <span class="json-key">"messageType"</span>: <span class="json-string">"TEXT"</span>,
+  <span class="json-key">"encryptedContent"</span>: <span class="json-string">"aGVsbG8gd29ybGQ="</span>,
+  <span class="json-key">"keyId"</span>: <span class="json-string">"key_789"</span>,
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1704067200000</span>,
+  <span class="json-key">"ttlSeconds"</span>: <span class="json-number">86400</span>,
+  <span class="json-key">"expiresAt"</span>: <span class="json-number">1704153600</span>,
+  <span class="json-key">"deliveryStatus"</span>: <span class="json-string">"DELIVERED"</span>,
+  <span class="json-key">"mediaUrls"</span>: {
+    <span class="json-key">"thumbnail"</span>: <span class="json-string">"https://cdn.../thumb.jpg"</span>,
+    <span class="json-key">"full"</span>: <span class="json-string">"https://cdn.../full.jpg"</span>
+  },
+  <span class="json-key">"metadata"</span>: <span class="json-string">"{\"platform\":\"iOS\"}"</span>
+}
+
+<span class="json-key">GSI:</span> <span class="json-string">messageId-index</span>
+- Partition Key: <span class="json-string">messageId</span>
+- For status updates and tracking
+
+<span class="json-key">TTL:</span> <span class="json-string">expiresAt</span> attribute</div>
+                </div>
+                
+                <div class="schema-section">
+                    <h3>DynamoDB Chats Table</h3>
+                    <div class="schema-code">Table: <span class="json-string">Chats</span>
+
+<span class="json-key">Partition Key:</span> <span class="json-string">chatId</span> (String)
+
+<span class="json-key">Attributes:</span>
+{
+  <span class="json-key">"chatId"</span>: <span class="json-string">"chat_xyz789"</span>,
+  <span class="json-key">"chatType
