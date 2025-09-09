@@ -325,7 +325,7 @@ graph LR
     subgraph "Write Path - Strong Consistency"
         API[API Request]
         DB[(PostgreSQL<br/>ACID Transactions)]
-        Event[Kafka Event<br/>Ordered per game)]
+        Event[Kafka Event<br/>Ordered per game]
     end
     
     subgraph "Read Path - Eventual Consistency"
