@@ -114,6 +114,9 @@ PUT /metadata/{path}         # Update metadata
 
 Our distributed file system follows a master-slave architecture with clear separation of metadata and data operations:
 
+** Architecture **
+![myimage](dfs.png?raw=true)
+
 ```
 [Clients] → [Metadata Service] (file locations)
     ↓
