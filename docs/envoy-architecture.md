@@ -529,3 +529,287 @@ Decision: "Bob wants to open Alice's snap → check state machine,
 | **Stripe** | AWS ALB | Custom (Ruby) | Ruby/Go services |
 
 The fundamental system design insight: **Envoy moves cross-cutting concerns (auth, retries, observability, TLS, traffic shaping) from application code into infrastructure.** This is why it became the standard data plane for microservice architectures — it lets service teams write business logic while platform teams manage networking policy.
+
+## Rate Limiting at the Edge — How Cloud API Gateways Handle It
+
+At companies like Snapchat (GCP) or Netflix (AWS), rate limiting at the API gateway involves **three layers** working together. The key question is: where does the counter live, and who enforces it?
+
+### The Three Layers
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  LAYER 1: Cloud Provider's Built-in Rate Limiting                   │
+│           (GCP Cloud Armor / AWS WAF / API Gateway throttling)      │
+│                                                                      │
+│  What it does:                                                       │
+│    ─ Blunt per-IP or per-region limits (DDoS protection)             │
+│    ─ "No single IP sends more than 10K req/sec"                      │
+│    ─ Runs at the cloud edge, before your code                        │
+│                                                                      │
+│  How it works:                                                       │
+│    ─ Counters in the cloud provider's infra (you don't manage them)  │
+│    ─ Rules configured via console/IaC                                │
+│    ─ Enforced at the load balancer layer                             │
+│                                                                      │
+│  Snapchat on GCP:                                                    │
+│    Cloud Armor rate limiting rules:                                   │
+│      ─ 10K req/sec per IP (anti-DDoS)                                │
+│      ─ Geo-blocking for sanctioned regions                           │
+│      ─ Bot detection via reCAPTCHA Enterprise                        │
+│    This is NOT per-user — it's per-IP, per-region, per-path          │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ passes through
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  LAYER 2: Envoy Rate Limit Filter → External Rate Limit Service     │
+│           (This is where per-user, per-endpoint limiting happens)    │
+│                                                                      │
+│  Envoy does NOT count requests itself.                               │
+│  It calls an external rate limit service via gRPC.                   │
+│                                                                      │
+│  The flow:                                                           │
+│                                                                      │
+│  Request arrives at Envoy                                            │
+│       │                                                              │
+│       ▼                                                              │
+│  Rate Limit Filter builds a descriptor:                              │
+│    {                                                                 │
+│      "domain": "snap-api",                                           │
+│      "descriptors": [                                                │
+│        {"key": "user_id",  "value": "user_abc123"},                  │
+│        {"key": "endpoint", "value": "/snap/send"}                    │
+│      ]                                                               │
+│    }                                                                 │
+│       │                                                              │
+│       │  gRPC call (sub-millisecond, within the same DC)             │
+│       ▼                                                              │
+│  ┌──────────────────────────────────────────────┐                    │
+│  │     External Rate Limit Service              │                    │
+│  │     (Lyft's ratelimit / custom Go service)   │                    │
+│  │                                              │                    │
+│  │  1. Receive descriptor {user_id, endpoint}   │                    │
+│  │  2. Look up policy:                          │                    │
+│  │     "user_id + /snap/send → 100 req/min"     │                    │
+│  │  3. Check counter in Redis:                  │                    │
+│  │     INCR ratelimit:user_abc123:/snap/send    │                    │
+│  │     EXPIRE key 60                            │                    │
+│  │  4. Return: OVER_LIMIT or OK                 │                    │
+│  │                                              │                    │
+│  │  Redis is the counter store:                 │                    │
+│  │    ─ Shared across all Envoy instances        │                    │
+│  │    ─ Atomic INCR (no race conditions)         │                    │
+│  │    ─ TTL-based window expiry                  │                    │
+│  └──────────────┬───────────────────────────────┘                    │
+│                 │                                                     │
+│                 ▼                                                     │
+│  Envoy receives response:                                            │
+│    OK         → continue to upstream service                         │
+│    OVER_LIMIT → return 429 to client, never hits upstream            │
+└──────────────────────────────────────────────────────────────────────┘
+                               │ passes through
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  LAYER 3: Application-Level Rate Limiting                            │
+│           (Service-specific, business logic limits)                   │
+│                                                                       │
+│  Examples at Snapchat:                                                │
+│    ─ SMS verification: max 3 codes per phone per hour                 │
+│    ─ Story posting: max 100 stories per day per user                  │
+│    ─ Friend requests: max 50 per day                                  │
+│                                                                       │
+│  These are too business-specific for the gateway.                     │
+│  Enforced inside the service itself.                                  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Envoy Calls an External Service (Not Inline)
+
+```
+Option A: Count in Envoy's memory (local rate limiting)
+  ─ Fast, no network hop
+  ─ BUT: each Envoy instance has its own counter
+  ─ With 50 Envoy instances, user gets 50x the actual limit
+  ─ Only useful for per-instance protection (connection limits)
+
+Option B: Call external service backed by Redis (global rate limiting)
+  ─ One extra gRPC hop (~1ms within same DC)
+  ─ BUT: single source of truth across ALL Envoy instances
+  ─ User's counter is shared: 100 req/min means 100 total, not per-instance
+  ─ This is what production systems use
+
+Envoy actually supports BOTH simultaneously:
+
+  ┌─────────────────────────────────────────────┐
+  │  Envoy Filter Chain                          │
+  │                                              │
+  │  ┌──────────────────┐  ┌──────────────────┐  │
+  │  │ Local Rate Limit │→ │Global Rate Limit │  │
+  │  │ (in-memory)      │  │(external service)│  │
+  │  │                  │  │                  │  │
+  │  │ "Max 1000 conn   │  │ "Max 100 req/min │  │
+  │  │  per instance"   │  │  per user global" │  │
+  │  │                  │  │                  │  │
+  │  │ First line of    │  │ Accurate global  │  │
+  │  │ defense (fast)   │  │ enforcement      │  │
+  │  └──────────────────┘  └──────────────────┘  │
+  └─────────────────────────────────────────────┘
+```
+
+### The External Rate Limit Service — Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                              │
+│  Envoy         Envoy         Envoy         Envoy             │
+│  instance 1    instance 2    instance 3    instance N        │
+│    │              │              │              │            │
+│    │   gRPC       │   gRPC       │   gRPC       │   gRPC    │
+│    └──────┬───────┴──────┬───────┴──────┬───────┘           │
+│           │              │              │                    │
+│           ▼              ▼              ▼                    │
+│    ┌─────────────────────────────────────────────┐          │
+│    │      Rate Limit Service (Go)                │          │
+│    │      (Lyft open-source / custom)            │          │
+│    │                                             │          │
+│    │  ┌───────────────────────────────────────┐  │          │
+│    │  │ Config (YAML or dynamic):             │  │          │
+│    │  │                                       │  │          │
+│    │  │ domain: snap-api                      │  │          │
+│    │  │ descriptors:                          │  │          │
+│    │  │   - key: user_id                      │  │          │
+│    │  │     descriptors:                      │  │          │
+│    │  │       - key: endpoint                 │  │          │
+│    │  │         value: /snap/send             │  │          │
+│    │  │         rate_limit:                   │  │          │
+│    │  │           unit: minute                │  │          │
+│    │  │           requests_per_unit: 100      │  │          │
+│    │  │                                       │  │          │
+│    │  │       - key: endpoint                 │  │          │
+│    │  │         value: /snap/open             │  │          │
+│    │  │         rate_limit:                   │  │          │
+│    │  │           unit: minute                │  │          │
+│    │  │           requests_per_unit: 200      │  │          │
+│    │  │                                       │  │          │
+│    │  │   - key: ip_address                   │  │          │
+│    │  │     rate_limit:                       │  │          │
+│    │  │       unit: second                    │  │          │
+│    │  │       requests_per_unit: 50           │  │          │
+│    │  └───────────────────────────────────────┘  │          │
+│    │                                             │          │
+│    │  Pipeline:                                  │          │
+│    │    1. Receive descriptor from Envoy          │          │
+│    │    2. Match against config → find limit      │          │
+│    │    3. INCR counter in Redis                  │          │
+│    │    4. Compare counter vs limit               │          │
+│    │    5. Return OK or OVER_LIMIT                │          │
+│    └─────────────────┬───────────────────────────┘          │
+│                      │                                       │
+│                      ▼                                       │
+│    ┌─────────────────────────────────────────────┐          │
+│    │            Redis Cluster                     │          │
+│    │                                             │          │
+│    │  Key format:                                │          │
+│    │    ratelimit:{domain}:{descriptors}:{window} │          │
+│    │                                             │          │
+│    │  Example:                                   │          │
+│    │    ratelimit:snap-api:user_abc123:           │          │
+│    │      /snap/send:1713500000  →  47            │          │
+│    │    TTL: 60s (auto-expires with the window)   │          │
+│    │                                             │          │
+│    │  Operations:                                │          │
+│    │    INCR (atomic, no race conditions)         │          │
+│    │    EXPIRE (window cleanup)                   │          │
+│    │    Pipeline batching (multiple descriptors)  │          │
+│    └─────────────────────────────────────────────┘          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### GCP vs AWS — How Cloud Providers Differ
+
+```
+┌──────────────────────┬───────────────────────┬──────────────────────┐
+│                      │  GCP (Snapchat)       │  AWS (Netflix)       │
+├──────────────────────┼───────────────────────┼──────────────────────┤
+│ Edge DDoS            │ Cloud Armor           │ AWS Shield + WAF     │
+│ protection           │ (per-IP, geo, bot)    │ (per-IP, geo, bot)   │
+│                      │                       │                      │
+│ L7 Load Balancer     │ Google Cloud LB       │ ALB / API Gateway    │
+│                      │ (global, anycast)     │ (regional)           │
+│                      │                       │                      │
+│ Built-in rate        │ Cloud Armor rate      │ WAF rate-based rules │
+│ limiting             │ limiting rules        │ API GW throttling    │
+│                      │ (per-IP, per-path)    │ (per-API-key, stage) │
+│                      │                       │                      │
+│ Per-user rate        │ Envoy + external      │ Envoy + external     │
+│ limiting             │ service + Redis       │ service + Redis      │
+│ (custom)             │ (Memorystore)         │ (ElastiCache)        │
+│                      │                       │                      │
+│ Key difference       │ GCP's global LB is    │ AWS API Gateway has  │
+│                      │ anycast (single IP,   │ built-in per-key     │
+│                      │ routes globally) —    │ throttling, but orgs │
+│                      │ but rate limiting is  │ at Netflix's scale   │
+│                      │ basic. Custom Envoy   │ outgrow it and use   │
+│                      │ layer needed for      │ Zuul/Envoy instead.  │
+│                      │ per-user limits.      │                      │
+└──────────────────────┴───────────────────────┴──────────────────────┘
+```
+
+### What Happens When the Rate Limit Service Goes Down?
+
+```
+This is a critical design decision. Options:
+
+FAIL OPEN (allow all traffic):
+  ─ Envoy config: failure_mode_deny: false
+  ─ If rate limit service is down → all requests pass through
+  ─ Risk: no protection during outage
+  ─ Used by: most companies (availability > protection)
+
+FAIL CLOSED (deny all traffic):
+  ─ Envoy config: failure_mode_deny: true
+  ─ If rate limit service is down → all requests rejected (429)
+  ─ Risk: rate limit outage = total outage
+  ─ Used by: almost nobody at the global level
+
+HYBRID (what Snapchat likely does):
+  ─ Global rate limit: fail open (don't break the app)
+  ─ Local rate limit: always on (in-memory, no dependency)
+  ─ Critical endpoints (payments, SMS): fail closed
+  ─ Circuit breaker on the rate limit service itself
+    (if it's slow, stop calling it rather than adding latency)
+
+  ┌──────────────────────────────────────────────┐
+  │  Envoy Rate Limit Filter config:              │
+  │                                               │
+  │  rate_limit_service:                          │
+  │    grpc_service:                              │
+  │      timeout: 20ms        ← very aggressive  │
+  │    failure_mode_deny: false  ← fail open     │
+  │                                               │
+  │  If gRPC call takes >20ms → skip rate limit,  │
+  │  allow request through. The rate limit service │
+  │  must be FAST or it gets bypassed.             │
+  └──────────────────────────────────────────────┘
+```
+
+### Rate Limiting Decision Summary
+
+```
+"Where should I rate limit?"
+
+┌─────────────────┬────────────────────────────┬────────────────────┐
+│ What            │ Where                      │ Counter store      │
+├─────────────────┼────────────────────────────┼────────────────────┤
+│ DDoS / per-IP   │ Cloud provider edge        │ Cloud managed      │
+│                 │ (Cloud Armor / WAF)        │ (you don't see it) │
+│                 │                            │                    │
+│ Per-user API    │ Envoy → external service   │ Redis              │
+│ limits          │ (global, accurate)         │ (shared cluster)   │
+│                 │                            │                    │
+│ Per-instance    │ Envoy local rate limit     │ In-memory           │
+│ protection      │ (fast, no dependency)      │ (per Envoy)        │
+│                 │                            │                    │
+│ Business rules  │ Application code           │ Redis or DB        │
+│ (3 SMS/hr)      │ (service-level)            │                    │
+└─────────────────┴────────────────────────────┴────────────────────┘
+```
