@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Analytics Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; }
+        .header { padding: 20px 32px; border-bottom: 1px solid #21262d; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .controls { display: flex; gap: 12px; padding: 20px 32px; align-items: center; }
+        .controls label { font-size: 13px; color: #8b949e; }
+        .controls select, .controls input { background: #161b22; border: 1px solid #30363d; color: #e1e4e8; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+        .controls button { background: #238636; color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .controls button:hover { background: #2ea043; }
+        .controls button.secondary { background: #21262d; }
+        .controls button.secondary:hover { background: #30363d; }
+        .chart-container { padding: 20px 32px; height: calc(100vh - 200px); }
+        .stats { display: flex; gap: 24px; padding: 0 32px 16px; }
+        .stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 20px; }
+        .stat .label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+        .stat .value.green { color: #3fb950; }
+        .stat .value.blue { color: #58a6ff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Event Analytics</h1>
+        <span id="query-time" style="font-size: 12px; color: #8b949e;"></span>
+    </div>
+
+    <div class="controls">
+        <label>Event:</label>
+        <select id="event-select">
+            <option value="page_load">page_load</option>
+            <option value="install">install</option>
+            <option value="signup">signup</option>
+            <option value="purchase">purchase</option>
+        </select>
+
+        <label>Range:</label>
+        <select id="range-select">
+            <option value="30">Last 30 min</option>
+            <option value="60">Last 1 hour</option>
+            <option value="120" selected>Last 2 hours</option>
+            <option value="360">Last 6 hours</option>
+            <option value="1440">Last 24 hours</option>
+        </select>
+
+        <button onclick="fetchData()">Refresh</button>
+        <button class="secondary" onclick="toggleAutoRefresh()">Auto-refresh: <span id="auto-status">OFF</span></button>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <div class="label">Total Events</div>
+            <div class="value green" id="total-count">-</div>
+        </div>
+        <div class="stat">
+            <div class="label">Peak / min</div>
+            <div class="value blue" id="peak-count">-</div>
+        </div>
+        <div class="stat">
+            <div class="label">Avg / min</div>
+            <div class="value" id="avg-count">-</div>
+        </div>
+        <div class="stat">
+            <div class="label">Query Time</div>
+            <div class="value" id="query-ms">-</div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="chart"></canvas>
+    </div>
+
+    <script>
+        let chart = null;
+        let autoRefreshInterval = null;
+
+        function initChart() {
+            const ctx = document.getElementById('chart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    scales: {
+                        x: {
+                            ticks: { color: '#8b949e', maxTicksLimit: 30, maxRotation: 45 },
+                            grid: { color: '#21262d' },
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: { color: '#8b949e' },
+                            grid: { color: '#21262d' },
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#161b22',
+                            borderColor: '#30363d',
+                            borderWidth: 1,
+                            titleColor: '#e1e4e8',
+                            bodyColor: '#8b949e',
+                        }
+                    }
+                }
+            });
+        }
+
+        async function fetchData() {
+            const event = document.getElementById('event-select').value;
+            const rangeMin = parseInt(document.getElementById('range-select').value);
+
+            const end = new Date();
+            const start = new Date(end.getTime() - rangeMin * 60 * 1000);
+
+            const url = `/v1/dashboard/timeseries?event=${event}&start=${start.toISOString()}&end=${end.toISOString()}`;
+
+            try {
+                const resp = await fetch(url);
+                const data = await resp.json();
+
+                const labels = data.data.map(d => d.minute.split('T')[1] || d.minute);
+                const counts = data.data.map(d => d.count);
+                const total = counts.reduce((a, b) => a + b, 0);
+                const peak = Math.max(...counts, 0);
+                const avg = counts.length > 0 ? (total / counts.length).toFixed(1) : 0;
+
+                chart.data.labels = labels;
+                chart.data.datasets = [{
+                    label: event,
+                    data: counts,
+                    borderColor: '#58a6ff',
+                    backgroundColor: 'rgba(88, 166, 255, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: rangeMin <= 120 ? 2 : 0,
+                }];
+                chart.update();
+
+                document.getElementById('total-count').textContent = total.toLocaleString();
+                document.getElementById('peak-count').textContent = peak.toLocaleString();
+                document.getElementById('avg-count').textContent = avg;
+                document.getElementById('query-ms').textContent = data.query_time_ms + 'ms';
+            } catch (err) {
+                console.error('Fetch error:', err);
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const status = document.getElementById('auto-status');
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                status.textContent = 'OFF';
+            } else {
+                autoRefreshInterval = setInterval(fetchData, 5000);
+                status.textContent = 'ON (5s)';
+            }
+        }
+
+        // Load available events from API
+        async function loadEvents() {
+            try {
+                const resp = await fetch('/v1/dashboard/events');
+                const data = await resp.json();
+                if (data.events && data.events.length > 0) {
+                    const select = document.getElementById('event-select');
+                    const existing = new Set(Array.from(select.options).map(o => o.value));
+                    data.events.forEach(e => {
+                        if (!existing.has(e)) {
+                            const opt = document.createElement('option');
+                            opt.value = e;
+                            opt.textContent = e;
+                            select.appendChild(opt);
+                        }
+                    });
+                }
+            } catch (e) {}
+        }
+
+        initChart();
+        loadEvents();
+        fetchData();
+    </script>
+</body>
+</html>
