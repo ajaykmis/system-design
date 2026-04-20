@@ -13,6 +13,7 @@ import requests
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel
 
+from circuit_breaker import CircuitBreaker
 from ranker import rank_candidates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -27,6 +28,7 @@ DIM = 128
 # --- Globals ---
 db_conn = None
 redis_client = None
+retrieval_breaker = CircuitBreaker("retrieval", failure_threshold=3, cooldown_seconds=15)
 
 
 def get_db():
@@ -107,19 +109,27 @@ def get_user_embedding(user_id: str) -> list[float] | None:
     return avg.tolist()
 
 
+def _call_retrieval(query_embedding: list[float], top_k: int) -> list[dict]:
+    """Direct call to the Retrieval service."""
+    resp = requests.post(
+        f"{RETRIEVAL_URL}/retrieve",
+        json={"query_embedding": query_embedding, "top_k": top_k},
+        timeout=5,
+    )
+    resp.raise_for_status()
+    return resp.json()["candidates"]
+
+
 def fetch_candidates(query_embedding: list[float], top_k: int = 100) -> list[dict]:
-    """Call the Retrieval service for ANN candidates."""
-    try:
-        resp = requests.post(
-            f"{RETRIEVAL_URL}/retrieve",
-            json={"query_embedding": query_embedding, "top_k": top_k},
-            timeout=5,
-        )
-        resp.raise_for_status()
-        return resp.json()["candidates"]
-    except Exception as e:
-        logger.error(f"Retrieval service error: {e}")
-        return []
+    """Call the Retrieval service for ANN candidates, protected by circuit breaker.
+
+    If the retrieval service is down (circuit open), returns an empty list
+    so the feed degrades gracefully instead of timing out.
+    """
+    return retrieval_breaker.call(
+        fn=lambda: _call_retrieval(query_embedding, top_k),
+        fallback=lambda: [],
+    )
 
 
 def fetch_content_metadata(content_ids: list[str]) -> dict[str, dict]:
@@ -248,6 +258,11 @@ def get_feed(
     ]
 
     return FeedResponse(items=items, next_offset=offset + limit)
+
+
+@app.get("/debug/circuit")
+def debug_circuit():
+    return retrieval_breaker.status()
 
 
 @app.get("/health")
