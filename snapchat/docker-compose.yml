@@ -1,4 +1,5 @@
 services:
+  # ── Infrastructure ──────────────────────────────────
   postgres:
     image: postgres:16
     container_name: snap-postgres
@@ -46,6 +47,107 @@ services:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
       interval: 10s
       retries: 10
+
+  # ── Go Services ─────────────────────────────────────
+  gateway:
+    build: ./gateway
+    container_name: snap-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      REGISTRATION_URL: http://registration:8081
+      AUTH_URL: http://auth:8082
+      INGESTION_URL: http://ingestion:8090
+      RANKING_URL: http://ranking:8092
+      RETRIEVAL_URL: http://retrieval:8091
+    depends_on:
+      registration:
+        condition: service_started
+      auth:
+        condition: service_started
+
+  registration:
+    build: ./registration
+    container_name: snap-registration
+    ports:
+      - "8081:8081"
+    environment:
+      POSTGRES_DSN: "postgres://snapuser:snappass@postgres:5432/snapchat?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auth:
+    build: ./auth
+    container_name: snap-auth
+    ports:
+      - "8082:8082"
+    environment:
+      POSTGRES_DSN: "postgres://snapuser:snappass@postgres:5432/snapchat?sslmode=disable"
+      JWT_SECRET: dev-secret-do-not-use-in-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Python Services ─────────────────────────────────
+  ingestion:
+    build: ./ingestion
+    container_name: snap-ingestion
+    ports:
+      - "8090:8090"
+    environment:
+      POSTGRES_DSN: "postgresql://snapuser:snappass@postgres:5432/snapchat"
+      KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  retrieval:
+    build: ./retrieval
+    container_name: snap-retrieval
+    ports:
+      - "8091:8091"
+    environment:
+      POSTGRES_DSN: "postgresql://snapuser:snappass@postgres:5432/snapchat"
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_ADDR: redis:6379
+      NODE_ID: retrieval-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ranking:
+    build: ./ranking
+    container_name: snap-ranking
+    ports:
+      - "8092:8092"
+    environment:
+      POSTGRES_DSN: "postgresql://snapuser:snappass@postgres:5432/snapchat"
+      REDIS_ADDR: redis:6379
+      RETRIEVAL_URL: http://retrieval:8091
+    depends_on:
+      redis:
+        condition: service_healthy
+      retrieval:
+        condition: service_started
+
+  feature-pipeline:
+    build: ./feature_pipeline
+    container_name: snap-feature-pipeline
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      REDIS_ADDR: redis:6379
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:
