@@ -326,9 +326,13 @@ PIPELINE 2: Product/Funnel Events ("what are users doing?")
        │
     Analytics dashboards + ad-hoc SQL queries
 
-  Example queries:
+  Blizzard = Spark jobs orchestrated by Airflow (Dataproc + Composer on GCP)
+  ├─ Hourly rollup jobs (cost, conversion rates per provider/country)
+  └─ Daily rollup jobs (executive dashboards, trend lines)
+
+  Example queries (on pre-aggregated tables, not raw events):
+    "SMS verification cost per day by provider, last 30 days"
     "SNAP_PHONE_PAGE_SEEN → PHONE_VERIFIED conversion rate by country"
-    "Daily active users by platform over last 90 days"
 ```
 
 ### Mapping to the Design Question
@@ -340,6 +344,69 @@ PIPELINE 2: Product/Funnel Events ("what are users doing?")
 | **Real-time dashboard** | M3DB + Grafana (infra) | Redis pre-aggregated counters + Dashboard API |
 | **Enrichment** | Blizzard enrichment stages (geo, GDPR) | Enrichment worker (same pattern) |
 | **Warehouse** | BigQuery | PostgreSQL partitioned (prod: ClickHouse or BigQuery) |
+
+### Multi-Tier Batch Aggregation (Blizzard)
+
+The real-time pre-aggregation (Redis counters) handles the dashboard. But for warehouse queries, Snap doesn't query raw events directly — that's too slow and expensive. Instead, **batch Spark jobs roll up data at multiple granularities**:
+
+```
+Raw events (billions/day)
+       │
+       ▼
+Hourly Spark job (Airflow-triggered)
+  GROUP BY event_name, provider, country, hour
+  → BigQuery: hourly_aggregates table
+       │
+       ▼
+Daily Spark job (Airflow-triggered)
+  SUM(hourly values) GROUP BY event_name, provider, country, date
+  → BigQuery: daily_aggregates table
+       │
+       ▼
+Dashboard reads from daily_aggregates (fast, small table)
+```
+
+**Example: SMS Verification Cost Dashboard**
+```
+Raw: each PHONE_VERIFIED event has {provider: "twilio", country: "US", cost: 0.0075}
+
+Hourly job (runs at :05 past each hour):
+  SELECT provider, country, DATE_TRUNC('hour', timestamp) AS hour,
+         COUNT(*) AS verifications, SUM(cost) AS total_cost
+  FROM raw_events
+  WHERE event_name = 'PHONE_VERIFIED'
+    AND timestamp >= current_hour - 1h
+  GROUP BY provider, country, hour
+  → writes ~100 rows to hourly_sms_cost table
+
+Daily job (runs at 00:15 UTC):
+  SELECT provider, country, DATE(hour) AS date,
+         SUM(verifications), SUM(total_cost)
+  FROM hourly_sms_cost
+  WHERE date = yesterday
+  GROUP BY provider, country, date
+  → writes ~20 rows to daily_sms_cost table
+
+Cost dashboard query (instant):
+  SELECT date, SUM(total_cost)
+  FROM daily_sms_cost
+  WHERE date >= CURRENT_DATE - 30
+  GROUP BY date ORDER BY date
+  → scans 30 rows instead of billions of raw events
+```
+
+**Why multi-tier:**
+- Raw events: billions of rows → expensive to scan, slow
+- Hourly rollup: thousands of rows → manageable, good for debugging
+- Daily rollup: tens of rows per day → instant dashboard queries, cheap
+
+This is the same pattern our design uses — we just add batch aggregation on top of the real-time tier:
+
+| Tier | Latency | Granularity | Storage | Use Case |
+|------|---------|-------------|---------|----------|
+| **Real-time** | <5ms | Per-minute | Redis (pre-aggregated) | Live dashboard, last 1 week |
+| **Hourly batch** | Minutes | Per-hour | BigQuery/warehouse | Drill-down, cost analysis |
+| **Daily batch** | Hours | Per-day | BigQuery/warehouse | Executive dashboards, trends |
 
 ### Why Two Storage Systems?
 
