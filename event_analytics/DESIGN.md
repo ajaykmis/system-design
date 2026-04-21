@@ -116,9 +116,13 @@ Key design decisions:
 
 **Problem:** "Show installs per minute over the last 2 hours" in <500ms.
 
-**Solution: Pre-aggregated counters in Redis**
+**Solution: Pre-aggregated counters in a fast key-value store**
 
 Instead of scanning raw events at query time, we pre-aggregate into per-minute buckets as events arrive.
+
+#### Option A: Redis (prototype)
+
+Our prototype uses Redis sorted sets — simple, fast, good for startup scale.
 
 **Redis data model:**
 ```
@@ -141,10 +145,72 @@ Example:
 
 **TTL:** Keys expire after 8 days (1 week + 1 day buffer).
 
-**Pre-aggregation worker:**
+**Limitations at scale:**
+- Single-node memory bound — all counters must fit in RAM
+- No built-in downsampling — per-minute data stays per-minute until TTL
+- No native time-series query language — you build it yourself with key patterns
+- Cluster mode adds operational complexity without solving the query problem
+
+#### Option B: M3DB (production — what Snap uses)
+
+At Snap's scale, real-time metrics dashboards are powered by **M3DB**, a distributed time-series database built by Uber. This is the recommended production alternative.
+
+**M3DB data model:**
+```
+Metric:  events.count{event_name="install", platform="ios"}
+         → value: 1  @ 2026-04-20T10:05:32Z
+
+Write path:
+  App/StatsD → M3 Coordinator → M3DB (replicated across nodes)
+
+Query path:
+  Grafana → M3 Query (Graphite API or PromQL) → M3DB
+```
+
+**Why M3DB over Redis for this:**
+
+| Aspect | Redis | M3DB |
+|--------|-------|------|
+| **Storage** | All in RAM, TTL-based eviction | Disk-backed with memory cache, configurable retention |
+| **Retention** | 1 week practical (RAM cost) | Months/years with automatic downsampling |
+| **Downsampling** | Manual (you build it) | Built-in: keep 10s resolution for 2 days, 1min for 2 weeks, 1h for 1 year |
+| **Query language** | Key pattern hacks | Graphite API + PromQL (native time-series queries) |
+| **Scalability** | Single-node or cluster (manual sharding) | Distributed by design, consistent hashing, replication |
+| **Aggregation** | Client-side (ZINCRBY) | M3 Aggregator does server-side rollups |
+| **Dashboarding** | Custom API + Chart.js | Native Grafana integration |
+
+**M3DB downsampling tiers (Snap's configuration):**
+```
+Tier 1: 10-second resolution, 48-hour retention   (real-time debugging)
+Tier 2: 1-minute resolution, 2-week retention     (dashboard queries — our <500ms requirement)
+Tier 3: 1-hour resolution, 1-year retention        (long-term trends)
+```
+
+The <500ms dashboard requirement maps to Tier 2 — M3DB serves per-minute queries from compressed, indexed time-series data with single-digit millisecond latency.
+
+**M3DB architecture:**
+```
+Events → Kafka → M3 Aggregator → M3DB cluster
+                  (pre-aggregates         (distributed storage,
+                   per metric,             consistent hashing,
+                   flushes every 10s)      3x replication)
+                                                │
+                                          M3 Coordinator
+                                          ├─ Graphite API  → Grafana
+                                          └─ PromQL API    → Grafana
+```
+
+**When to choose which:**
+- **Redis:** Startup, <1M events/day, single region, simple counters, fast to build
+- **M3DB:** Scale-up, >10M events/day, multi-region, need downsampling + long retention, team has ops capacity
+
+Our prototype uses Redis to demonstrate the pre-aggregation pattern. The production upgrade path is swapping Redis for M3DB — the aggregation worker becomes an M3 Aggregator, and the dashboard API is replaced by Grafana querying M3 Coordinator.
+
+**Pre-aggregation worker (prototype):**
 - Consumes from Kafka `raw-events`
 - For each event: `ZINCRBY counts:{event_name}:{minute} 1 "total"`
 - Runs as a separate consumer group from enrichment (independent)
+- **Production equivalent:** M3 Aggregator consuming the same Kafka topic
 
 **Dashboard API (Go :8101):**
 ```
