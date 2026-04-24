@@ -506,3 +506,47 @@ At Snap's scale (~300M+ DAU), the key challenges beyond our prototype:
 4. **Warehouse query cost**: BigQuery charges per bytes scanned → partitioning by date + clustering by event_name reduces cost 10-100x
 5. **Late-arriving events**: Events from mobile devices can arrive hours late → watermarking and late-data handling in the pipeline
 6. **Schema evolution**: New event properties added frequently → BigQuery's schema auto-detection + Blizzard's flexible transformation stages
+
+---
+
+## Observability — Metrics
+
+Both services are instrumented with Prometheus client libraries and expose a `/metrics` endpoint. A shared monitoring stack (Prometheus + Grafana + Alertmanager) scrapes all services — see `monitoring/` at the repo root.
+
+### Pull vs Push model
+
+We use the **pull model** (Prometheus scrapes `/metrics` every 15s). Both the ingestion API and the aggregator are long-running processes, making pull the natural fit:
+- `curl :9100/metrics` or `curl :9101/metrics` lets you inspect current state without touching Prometheus
+- Services have no dependency on a collector address — instrumentation is decoupled from where metrics land
+- Prometheus controls scrape rate; a slow collector never blocks the service
+
+**Scaling boundary:** Pull breaks above ~2K targets or ~5M active time series. At Snap scale (100K pods, high cardinality), push with local pre-aggregation is required — see the pull vs push section in the monitoring spec (`docs/superpowers/specs/2026-04-24-metrics-monitoring-design.md`).
+
+### ingestion (Go) — metrics port `:9100`
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `ea_http_requests_total` | Counter | method, path, status | Total HTTP requests |
+| `ea_http_request_duration_seconds` | Histogram | method, path | Request latency (buckets: 5ms–10s) |
+| `ea_kafka_events_produced_total` | Counter | — | Events successfully published to Kafka |
+| `ea_kafka_produce_errors_total` | Counter | — | Failed Kafka produce calls |
+
+### aggregator (Python) — metrics port `:9101`
+
+Metrics are served from a background HTTP thread; the main thread remains the Kafka consumer loop.
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `ea_kafka_messages_consumed_total` | Counter | event_name | Messages consumed from raw-events topic |
+| `ea_redis_increments_total` | Counter | — | Successful Redis ZINCRBY calls |
+| `ea_aggregation_errors_total` | Counter | — | Processing errors (decode, Redis, etc.) |
+| `ea_kafka_consumer_lag` | Gauge | — | Estimated consumer lag (messages behind head) |
+
+### Alert rules (evaluated by Prometheus every 1m)
+
+| Rule | Condition | Severity |
+|---|---|---|
+| `EAHighErrorRate` | HTTP 5xx rate > 5% for 5m | warning |
+| `EAKafkaProducerErrors` | `ea_kafka_produce_errors_total` rate > 0 for 5m | critical |
+| `EAHighLatencyP99` | p99 request duration > 1s for 5m | warning |
+| `EAAggregationErrors` | `ea_aggregation_errors_total` rate > 0 for 5m | warning |

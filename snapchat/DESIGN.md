@@ -29,7 +29,7 @@ Go for latency-sensitive infra services. Python for ML/data pipeline services.
 └──────┬──────┘ └───┬────┘ └─┬────┬───┘
        │            │        │    │
        ▼            ▼        │    ▼
-  ┌─────────────────────┐   │  Kafka
+  ┌──────────────────----│   |   Kafka
   │    PostgreSQL :5433  │   │  ┌─────────────────┐
   │  users               │   │  │ content-raw     │──→ Retrieval :8091
   │  verification_codes  │   │  │ engagement-events│──→ Feature Pipeline
@@ -42,9 +42,9 @@ Go for latency-sensitive infra services. Python for ML/data pipeline services.
        ▼                                                   │
   ┌──────────┐                                             │
   │Retrieval │ :8091 (Python)                              │
-  │  HNSW    │ ← hnswlib index (M=16, ef=50)              │
-  │  leader  │ ← Redis SETNX election                     │
-  │  hash    │ ← Consistent hash ring                     │
+  │  HNSW    │ ← hnswlib index (M=16, ef=50)               │
+  │  leader  │ ← Redis SETNX election                      │ 
+  │  hash    │ ← Consistent hash ring                      │
   └────┬─────┘                                             │
        │ top-100 candidates                                │
        ▼                                                   │
@@ -426,3 +426,58 @@ docker exec snap-redis redis-cli HGETALL "features:<content_id>"
 | "Design phone-based registration" | SMS verification, attempt limiting, rate limiting, PII hashing | `registration/` |
 | "How do you handle service failures?" | Circuit breaker pattern, graceful degradation | `ranking/circuit_breaker.py` |
 | "Design a real-time feature store" | Event stream → windowed aggregation → Redis materialization | `feature_pipeline/` |
+
+---
+
+## Observability — Metrics
+
+All Go and Python HTTP services are instrumented with Prometheus client libraries. A shared monitoring stack in `monitoring/` scrapes all services via the pull model.
+
+### Pull vs Push model
+
+We use **pull** (Prometheus scrapes every 15s). All services are long-running, so the pull model is natural:
+- Each service can be debugged with `curl :PORT/metrics` independently
+- No collector address baked into service code
+- Prometheus controls scrape rate; services are never blocked
+
+**Scaling boundary:** At 100K pods with high-cardinality labels, pull breaks. The production approach (Snap-style) is push with sidecar pre-aggregation: `StatsD UDP → Envoy sidecar → M3DB`. See `docs/superpowers/specs/2026-04-24-metrics-monitoring-design.md`.
+
+### gateway (Go) — metrics port `:9200`
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `snap_http_requests_total` | Counter | method, path, status | Total proxied requests |
+| `snap_http_request_duration_seconds` | Histogram | method, path | End-to-end proxy latency |
+| `snap_rate_limit_rejections_total` | Counter | — | Requests rejected by token bucket |
+| `snap_auth_failures_total` | Counter | — | Failed JWT validations |
+
+### registration (Go) — metrics port `:9201`
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `snap_registrations_total` | Counter | status (success/failure) | Registration attempts |
+| `snap_sms_sent_total` | Counter | — | OTP SMS dispatched |
+
+### auth (Go) — metrics port `:9202`
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `snap_tokens_issued_total` | Counter | type (access/refresh) | Tokens minted |
+| `snap_auth_failures_total` | Counter | reason (invalid_creds/expired) | Auth failures |
+
+### ingestion (Python) — metrics port `:9203`
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `snap_http_requests_total` | Counter | method, path, status | HTTP requests to ingestion |
+| `snap_snaps_uploaded_total` | Counter | — | Snap content accepted |
+| `snap_kafka_events_produced_total` | Counter | — | Events published to Kafka |
+
+### Alert rules (evaluated by Prometheus every 1m)
+
+| Rule | Condition | Severity |
+|---|---|---|
+| `SnapHighErrorRate` | HTTP 5xx rate > 5% for 5m | warning |
+| `SnapRateLimitSpike` | rate_limit_rejections > 10/s for 2m | warning |
+| `SnapHighLatencyP99` | p99 proxy latency > 1s for 5m | warning |
+| `SnapAuthFailureSpike` | auth_failures > 5/s for 2m | critical |
