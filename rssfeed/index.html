@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RSS News</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f1f3f4;
+      color: #202124;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid #dadce0;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    header h1 {
+      font-size: 22px;
+      font-weight: 400;
+      color: #202124;
+      letter-spacing: -0.3px;
+    }
+
+    header h1 span { color: #1a73e8; font-weight: 600; }
+
+    #filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+
+    .filter-btn {
+      padding: 6px 14px;
+      border-radius: 16px;
+      border: 1px solid #dadce0;
+      background: #fff;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .filter-btn:hover { background: #f1f3f4; }
+    .filter-btn.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+
+    main {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+
+    #status {
+      text-align: center;
+      padding: 60px 0;
+      color: #5f6368;
+      font-size: 15px;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #dadce0;
+      border-top-color: #1a73e8;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      padding: 16px;
+      border: 1px solid #dadce0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: box-shadow 0.15s;
+    }
+
+    .card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+    .card-source {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #1a73e8;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.4;
+    }
+
+    .card-title a {
+      color: #202124;
+      text-decoration: none;
+    }
+
+    .card-title a:hover { color: #1a73e8; }
+
+    .card-desc {
+      font-size: 13px;
+      color: #5f6368;
+      line-height: 1.5;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .card-date {
+      font-size: 12px;
+      color: #9aa0a6;
+      margin-top: auto;
+    }
+
+    #count {
+      font-size: 13px;
+      color: #5f6368;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>RSS <span>News</span></h1>
+  <div id="filters">
+    <button class="filter-btn active" data-source="All">All</button>
+  </div>
+</header>
+
+<main>
+  <div id="status">
+    <div class="spinner"></div>
+    Fetching feeds…
+  </div>
+  <div id="count"></div>
+  <div id="grid"></div>
+</main>
+
+<script>
+  let allArticles = [];
+
+  function stripHtml(html) {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return tmp.textContent || "";
+  }
+
+  function timeAgo(unixTs) {
+    if (!unixTs) return "";
+    const diff = Math.floor(Date.now() / 1000) - unixTs;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  function render(source) {
+    const articles = source === "All"
+      ? allArticles
+      : allArticles.filter(a => a.source === source);
+
+    document.getElementById("count").textContent =
+      `${articles.length} article${articles.length !== 1 ? "s" : ""}${source !== "All" ? " from " + source : ""}`;
+
+    const grid = document.getElementById("grid");
+    grid.innerHTML = articles.map(a => `
+      <div class="card">
+        <div class="card-source">${a.source}</div>
+        <div class="card-title">
+          <a href="${a.link}" target="_blank" rel="noopener">${a.title || "(no title)"}</a>
+        </div>
+        ${a.description ? `<div class="card-desc">${stripHtml(a.description)}</div>` : ""}
+        <div class="card-date">${timeAgo(a.parsed_time)}</div>
+      </div>
+    `).join("");
+  }
+
+  function buildFilters(articles) {
+    const sources = [...new Set(articles.map(a => a.source))].sort();
+    const bar = document.getElementById("filters");
+    sources.forEach(src => {
+      const btn = document.createElement("button");
+      btn.className = "filter-btn";
+      btn.dataset.source = src;
+      btn.textContent = src;
+      bar.appendChild(btn);
+    });
+
+    bar.addEventListener("click", e => {
+      const btn = e.target.closest(".filter-btn");
+      if (!btn) return;
+      bar.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      render(btn.dataset.source);
+    });
+  }
+
+  async function load() {
+    try {
+      const res = await fetch("/api/news");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      allArticles = await res.json();
+
+      document.getElementById("status").style.display = "none";
+      buildFilters(allArticles);
+      render("All");
+    } catch (err) {
+      document.getElementById("status").innerHTML =
+        `<div style="color:#d93025">Failed to load feeds: ${err.message}</div>`;
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
