@@ -1,17 +1,21 @@
 package main
 
+import (
+	"sync"
+)
+
 type WebCrawler struct {
 }
 
 func NewWebCrawler() *WebCrawler {
-
+	return &WebCrawler{}
 }
 
 type HttpParser struct {
 }
 
 func NewHttpParser() *HttpParser {
-
+	return &HttpParser{}
 }
 
 // http parser methods
@@ -23,37 +27,43 @@ func (wc *WebCrawler) Crawl(url string, depth int) {
 
 }
 
-
-func worker(queue chan string, visited map[string]bool, results *[]string, httpParser *HttpParser, wg *sync.WaitGroup) {
-	defer wg.Done()
-	select {	
-	case <- queue:
-		if visited[url] {
-			continue
-		}
-		visited[url] = true
-		*results = append(*results, url)
-		// parse the URL to get more URLs
-		newUrls := httpParser.Parse(url)
-		for _, newUrl := range newUrls {
-			if !visited[newUrl] {
-				queue <- newUrl
-			}
-	}
-
-	}
-	for url := range queue {
-		if visited[url] {
 func crawl(startUrl string, httpParser *HttpParser) []string {
 	// start with base URL
-	queue := chan string
+	queue := make(chan string)
 	visited := make(map[string]bool)
 	var results []string
+	var wg sync.WaitGroup
 
 	// worker function to process URLs
-	var worker func()
-	worker = func() {
+	worker := func() {
+		defer wg.Done()
 		for url := range queue {
+			if visited[url] {
+				continue
+			}
+			visited[url] = true
+			results = append(results, url)
+			// parse the URL to get more URLs
+			newUrls := httpParser.Parse(url)
+			for _, newUrl := range newUrls {
+				if !visited[newUrl] {
+					queue <- newUrl
+				}
+			}
+		}
 	}
 
+	// start worker goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	queue <- startUrl
+	wg.Wait()
+	close(queue)
+	return results
+}
+
+func main() {
 }

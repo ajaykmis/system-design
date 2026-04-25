@@ -240,7 +240,7 @@ func (ce *CommandExecutor) CleanupCompleted() int {
 func main() {
 	executor := NewCommandExecutor()
 
-	fmt.Println("=== Command Execution System Demo ===\n")
+	fmt.Println("=== Command Execution System Demo ===")
 
 	// Example 1: Simple command with callback
 	fmt.Println("1. Simple command with callback:")
