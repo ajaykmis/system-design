@@ -1,3 +1,4 @@
 api
 worker
 *.env
+.localstack/

@@ -1,0 +1,76 @@
+services:
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bulkcatalog
+    ports:
+      - "5434:5432"   # 5432 = Homebrew, 5433 = rssfeed, 5434 = this
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - bulk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bulkcatalog"]
+      interval: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: s3,sqs
+      DEFAULT_REGION: us-east-1
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init.sh
+      - bulk_localstack:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3 ls"]
+      interval: 10s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8082:8082"
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/bulkcatalog?sslmode=disable
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      S3_UPLOAD_BUCKET: bulk-catalog-uploads
+      S3_ERROR_BUCKET: bulk-catalog-errors
+      PORT: :8082
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/bulkcatalog?sslmode=disable
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      S3_UPLOAD_BUCKET: bulk-catalog-uploads
+      S3_ERROR_BUCKET: bulk-catalog-errors
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/bulk-catalog-jobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  bulk_pgdata:
+  bulk_localstack:
