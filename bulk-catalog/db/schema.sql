@@ -25,6 +25,16 @@ CREATE TABLE bulk_job_files (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE catalog (
+    merchant_id TEXT NOT NULL,
+    sku_id      TEXT NOT NULL,
+    title       TEXT,
+    price       TEXT,
+    description TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (merchant_id, sku_id)
+);
+
 -- reaper query: abandoned uploads + stuck processing
 CREATE INDEX ON bulk_jobs (status, updated_at);
 CREATE INDEX ON bulk_jobs (merchant_id, created_at DESC);
