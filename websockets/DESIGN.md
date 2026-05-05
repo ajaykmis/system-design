@@ -1,211 +1,210 @@
-# WebSocket Chat — Multi-Server Design
+# WebSocket Chat — Multi-Server with Targeted Pub/Sub
 
-## What is WebSocket?
+## The Problem with Naive Fan-out
 
-WebSocket is a **full-duplex, persistent communication protocol** over a single TCP connection.
-Unlike HTTP's request-response model, once the WebSocket handshake completes (via an HTTP upgrade),
-both client and server can send messages at any time without re-establishing connections.
+The first version subscribed every server to a single global Redis channel:
 
 ```
-HTTP:  Client ──request──► Server ──response──► Client   (connection closes)
-WS:    Client ◄────────────────────────────────► Server   (persistent, bidirectional)
+Server 1 ──► SUBSCRIBE chat:room:general
+Server 2 ──► SUBSCRIBE chat:room:general
+Server 3 ──► SUBSCRIBE chat:room:general   ← gets alice↔bob DM traffic (wrong)
 ```
+
+This breaks for 1:1 DMs and private channels: **not every server needs every message.**
+Server 3 (charlie only, not in alice↔bob DM) has no business processing that traffic.
 
 ---
 
 ## Architecture
 
 ```
-                           ┌──────────────────────────────────────────────┐
-                           │              nginx (LB :8090)                │
-                           │  round-robin, WS-aware (Upgrade headers)     │
-                           └───────────────┬──────────────┬───────────────┘
-                                           │              │
-                             ┌─────────────▼──┐      ┌───▼────────────┐
-                             │   Server 1     │      │   Server 2     │
-                             │                │      │                │
-                             │  Local Hub     │      │  Local Hub     │
-                             │  alice ──conn  │      │  bob ───conn   │
-                             │  charlie─conn  │      │  dave ──conn   │
-                             └───────┬────────┘      └──────┬─────────┘
-                                     │  PUBLISH             │  PUBLISH
-                                     ▼                      ▼
-                             ┌────────────────────────────────────────────┐
-                             │           Redis Pub/Sub                    │
-                             │      channel: chat:room:general            │
-                             └──────────────┬─────────────────────────────┘
-                                            │
-                            SUBSCRIBE       │       SUBSCRIBE
-                    ┌───────────────────────┤───────────────────────┐
-                    ▼                       │                       ▼
-            Server 1 subscriber            │               Server 2 subscriber
-            → localBroadcast()             │               → localBroadcast()
-            → delivers to alice, charlie   │               → delivers to bob, dave
+                    ┌────────────────────────────────────────────────────────┐
+                    │               nginx  :8090  (round-robin)              │
+                    └──────────┬──────────────┬────────────────┬─────────────┘
+                               │              │                │
+                    ┌──────────▼───┐  ┌───────▼──────┐  ┌─────▼────────┐
+                    │  Server 1    │  │  Server 2    │  │  Server 3    │
+                    │  alice       │  │  bob         │  │  charlie     │
+                    └──────┬───────┘  └───────┬──────┘  └──────┬───────┘
+                           │                  │                 │
+                 SUBSCRIBE  │       SUBSCRIBE  │     SUBSCRIBE   │
+                 room:gen   │       room:gen   │     room:gen    │
+                 dm:alice:b │       dm:alice:b │                 │
+                            │       dm:bob:c   │     dm:bob:c    │
+                            │                  │                 │
+                            ▼                  ▼                 ▼
+                    ┌──────────────────────────────────────────────────────┐
+                    │                   Redis Pub/Sub                      │
+                    │  room:general    dm:alice:bob    dm:bob:charlie       │
+                    └──────────────────────────────────────────────────────┘
 ```
 
-### Message flow (alice on Server 1 sends to bob on Server 2)
-
+**Observed subscriptions after alice↔bob DM + #general:**
 ```
-1. Alice types "hello"
-   → Server 1 reads from WebSocket conn
-   → PUBLISH chat:room:general {server_id:"server-1", username:"alice", text:"hello"}
+server1: subs = ['dm:alice:bob', 'room:general']
+server2: subs = ['dm:alice:bob', 'room:general']
+server3: subs = ['room:general']          ← no dm:alice:bob — correct
+```
 
-2. Redis fans out to all subscribers
-   → Server 1 subscriber receives it → localBroadcast → charlie sees it
-   → Server 2 subscriber receives it → localBroadcast → bob, dave see it
+Server 3 never receives alice↔bob DM messages.
 
-3. Alice also sees her own message (Server 1's sub receives its own publish)
+---
+
+## Message Flow
+
+### Group channel message (alice → #general)
+```
+alice types "hello #general!"
+  → Server 1 PUBLISH room:general {...}
+  → Redis delivers to: Server 1 sub, Server 2 sub, Server 3 sub
+  → Server 1 localBroadcast(room:general) → alice
+  → Server 2 localBroadcast(room:general) → bob
+  → Server 3 localBroadcast(room:general) → charlie
+```
+
+### 1:1 DM (alice → bob)
+```
+alice sends DM to bob
+  → Server 1 PUBLISH dm:alice:bob {...}
+  → Redis delivers to: Server 1 sub, Server 2 sub   (NOT Server 3)
+  → Server 1 localBroadcast(dm:alice:bob) → alice (echo/confirmation)
+  → Server 2 localBroadcast(dm:alice:bob) → bob
+  → Server 3: not subscribed → zero CPU, zero traffic
 ```
 
 ---
 
-## Key Design Decisions
+## Client Protocol (JSON over WebSocket)
 
-### 1. Each server only delivers to its own clients
+| Action | Payload | Effect |
+|---|---|---|
+| `join` | `{channel:"general"}` | Server subscribes to `room:general` if first local client |
+| `leave` | `{channel:"general"}` | Server unsubscribes if last local client |
+| `msg` | `{channel:"general", text:…}` | PUBLISH to `room:general` |
+| `join_dm` | `{to:"bob"}` | Server subscribes to `dm:alice:bob` |
+| `dm` | `{to:"bob", text:…}` | PUBLISH to `dm:alice:bob` |
 
-The Hub is **local-only** — `map[*client]struct{}`. A server never holds connections
-from other servers. This keeps the broadcast path O(local_clients), not O(all_clients).
-
-```go
-// On client message → publish to Redis, NOT local broadcast
-rdb.Publish(ctx, "chat:room:general", payload)
-
-// Redis subscriber goroutine → local broadcast only
-func subscribeRedis(...) {
-    for msg := range sub.Channel() {
-        hub.localBroadcast(msg.Payload)  // only this server's clients
-    }
-}
+### Redis channel naming
+```
+Group:  room:{name}              e.g.  room:general
+DM:     dm:{min(u1,u2)}:{max}    e.g.  dm:alice:bob   (alphabetically sorted)
 ```
 
-### 2. Per-client write channel (backpressure)
-
-Each client has a buffered `send chan []byte` (capacity 256). The write pump drains it
-in its own goroutine. A slow client never blocks the hub's broadcast loop — if the buffer
-is full, the message is dropped for that client rather than blocking everyone else.
-
-```
-Redis subscriber goroutine
-  → hub.localBroadcast()          (holds RLock, fast)
-      → for each client: c.send <- payload   (non-blocking select)
-
-Per-client write goroutine
-  → reads from c.send
-  → conn.WriteMessage()           (can block on slow client, isolated)
-```
-
-### 3. Publish on every message, subscribe once per room
-
-The server subscribes to a room channel at startup (or on first join). It publishes every
-incoming client message to Redis. Redis delivers to all server subscribers — including the
-publishing server itself, so the sender sees their own message echoed back (server-side
-confirmation that the message was received and distributed).
-
-### 4. Nginx as WebSocket-aware load balancer
-
-```nginx
-proxy_http_version 1.1;
-proxy_set_header Upgrade    $http_upgrade;
-proxy_set_header Connection "Upgrade";
-proxy_read_timeout  3600s;   # keep WS connections alive through the proxy
-```
-
-WebSocket connections are inherently sticky after the upgrade — the persistent TCP
-connection always goes to the same backend. The LB only routes the initial HTTP upgrade.
-No session-affinity (`ip_hash`) needed for correctness, only for the upgrade request.
+Alphabetical sort ensures both sides of a DM use the same Redis key regardless of who initiates.
 
 ---
 
-## Schema / Envelope
+## Subscription Manager (reference counting)
 
-```json
-{
-  "server_id":  "server-1",
-  "username":   "alice",
-  "text":       "hello from alice",
-  "room":       "general",
-  "ts":         1746404800000
-}
+```
+SubManager:
+  subs   map[redisChannel → *redis.PubSub]
+  refcnt map[redisChannel → int]
+
+Join(client, channel):
+  refcnt[channel]++
+  if refcnt == 1:
+    ps = rdb.Subscribe(channel)
+    go forward(ps)          ← one goroutine per active Redis sub on this server
+    log "SUBSCRIBE channel"
+  else:
+    // reuse existing sub, no new Redis sub needed
+
+Leave(client, channel):
+  refcnt[channel]--
+  if refcnt == 0:
+    ps.Close()              ← stops the forward goroutine
+    log "UNSUBSCRIBE channel"
+
+LeaveAll(client):           ← called on disconnect
+  for ch in client.channels:
+    Leave(client, ch)
 ```
 
-`server_id` is included so clients can display `[via server-2]` annotations when a
-message originates from a different server — useful for observability and debugging.
+**Why reference counting matters:**
+- Two local clients in #general → 1 Redis subscription (not 2)
+- Second client joins → `refcnt` goes 1→2, no new Redis sub
+- First client leaves → `refcnt` goes 2→1, still subscribed
+- Last client leaves → `refcnt` goes 1→0, UNSUBSCRIBE
 
 ---
 
 ## Tradeoffs
 
-### Redis Pub/Sub vs alternatives
+### Dynamic subscriptions vs static global subscription
 
-| | Redis Pub/Sub | Kafka | NATS | In-process channel |
-|---|---|---|---|---|
-| **Delivery guarantee** | At-most-once (fire and forget) | At-least-once (with consumer groups) | At-most-once or exactly-once | At-most-once |
-| **Message history** | None | Configurable retention | JetStream only | None |
-| **Throughput** | ~1M msgs/sec | ~10M msgs/sec | ~10M msgs/sec | unlimited |
-| **Ops complexity** | Low (already using Redis) | High (cluster, ZK/KRaft) | Low | Zero |
-| **Fan-out model** | Every subscriber gets every message | Consumer groups partition messages | Pub/sub or queue | N/A |
-| **Best for** | Chat, notifications, low-stakes fan-out | Event sourcing, audit logs, replay | Low-latency messaging | Single-node only |
-
-**Why Redis Pub/Sub for chat:**
-- Messages are ephemeral — chat doesn't need Kafka's replay guarantee
-- Every server needs every message (fan-out, not load-balancing)
-- Already in the infrastructure — no extra ops burden
-- Sub-millisecond fan-out latency
-
-**When to choose Kafka instead:**
-- You need message history (user joined mid-conversation, wants to see prior messages)
-- You need guaranteed delivery (no dropped messages if a server is briefly down)
-- At-most-once is unacceptable
-
-### Single channel vs per-room channels
-
-| | Single global channel | Per-room channel |
+| | Static (old) | Dynamic (current) |
 |---|---|---|
-| Simplicity | ✓ | — |
-| Wasted CPU | Servers process messages for rooms they have no clients in | Only receive messages for rooms with local clients |
-| Subscription management | Static, at startup | Dynamic, join/leave on connect/disconnect |
+| Redis subs per server | 1 (always) | 1 per active channel on that server |
+| DM privacy | ✗ All servers see all DMs | ✓ Only servers with participants |
+| Memory | Fixed | O(active channels on this server) |
+| Complexity | Trivial | Subscription manager + refcounting |
+| Redis traffic | Every message to every server | Only messages relevant to local clients |
+| Cold start | No setup needed | Must re-subscribe on server restart |
 
-**This POC:** single `chat:room:general`. Production: subscribe on first client join to a room, unsubscribe on last client leave. Reduces Redis traffic proportionally to room count.
+At 10M users / 100 active channels per server, dynamic subs reduce Redis bandwidth by ~99% for DMs.
 
-### At-most-once delivery (the biggest Redis Pub/Sub weakness)
+### Redis channel per DM pair vs per user
 
-If a server is restarting when Redis publishes a message, that server's clients miss it.
-No retry, no replay. Mitigations:
+**Option A — channel per pair (current):** `dm:alice:bob`
+- 1 PUBLISH per message
+- Subscriber: any server with alice or bob
+- Scales to N messages per DM cleanly
 
-1. **Client-side reconnect + message catch-up**: on reconnect, client fetches last N messages
-   from a DB (Cassandra, DynamoDB) that the server writes to alongside publishing to Redis.
-2. **Dual-write**: server writes to DB first, then publishes to Redis as a notification.
-   Clients on reconnect query `GET /rooms/{room}/messages?after={last_seen_ts}`.
-3. **Switch to Kafka**: subscribe from a committed offset, replay on reconnect.
+**Option B — channel per user:** `user:bob`
+- Sender PUBLISHes to `user:bob` (1 publish, direct)
+- Bob's server subscribes to `user:bob` (one sub regardless of who's DMing)
+- Simpler subscription management (subscribe once per local user, on connect)
+- Works well for DMs, but for group channels: sender must PUBLISH to every member's channel (N publishes for N members → fan-out at sender)
 
-### Connection count limits per server
-
-Each WebSocket is a goroutine (read pump) + a goroutine (write pump) + a file descriptor.
-On Linux, default file descriptor limit is 1024 (raises to ~1M with `ulimit -n`).
-Memory: ~8KB per goroutine stack × 2 goroutines = ~16KB/connection.
-
-| Clients per server | Memory (goroutines) | FD headroom |
+| | Per-pair channel | Per-user channel |
 |---|---|---|
-| 10,000 | ~160 MB | Fine with `ulimit -n 65535` |
-| 100,000 | ~1.6 GB | Fine with `ulimit -n 200000` |
-| 1,000,000 | ~16 GB | Need epoll-based server (e.g. gnet, easyws) or Go netpoll |
+| DMs | 1 publish | 1 publish |
+| Group (N members) | 1 publish | N publishes |
+| Sub management | join/leave per conversation | join on connect, leave on disconnect |
+| Privacy | Shared between both parties | Each user's channel is private |
 
-At Slack/WhatsApp scale, connection servers are separate from application servers.
-Connection servers do nothing but maintain TCP state and forward frames. Application
-logic is behind an internal API the connection server calls.
+**Per-user channel is better for DM-heavy systems (Slack DMs, WhatsApp).
+Per-pair/room channel is better for group-heavy systems (IRC, Discord).**
 
-### nginx vs L4 load balancer
+### At-most-once delivery (Redis Pub/Sub limitation)
 
-| | nginx (L7) | AWS NLB / HAProxy L4 |
-|---|---|---|
-| WebSocket support | ✓ (with upgrade headers) | ✓ (transparent passthrough) |
-| SSL termination | ✓ | ✓ |
-| Overhead | Parses HTTP frames | Passes raw TCP — lower latency |
-| Observability | Access logs, status codes | Limited |
-| Sticky sessions | `ip_hash` or cookie | Source IP |
+Redis Pub/Sub drops messages if the subscriber is not connected at publish time (server restarting, network blip). For chat this means:
 
-For chat at scale: L4 (NLB) in front of connection servers, L7 (nginx/envoy) for
-the internal API layer.
+| Scenario | Impact |
+|---|---|
+| Server restarts mid-conversation | Messages during restart window are lost |
+| Redis failover | Messages during failover are lost |
+| Slow subscriber | Messages can be dropped if buffer overflows |
+
+**Mitigation (not in this POC):**
+1. **Dual-write**: persist messages to DB (Cassandra/DynamoDB) before publishing to Redis
+2. **Client catch-up**: on reconnect, client sends `{last_seen_ts}` and fetches missed messages from DB
+3. **Switch to Kafka**: subscribe with committed offsets — on reconnect, replay from last offset
+
+### localBroadcast and per-client channels
+
+```go
+// Delivered by the Redis subscriber goroutine
+func (h *Hub) localBroadcast(redisChannel string, payload []byte) {
+    for c := range h.clients {
+        if c.inChannel(redisChannel) {   // only clients in this channel
+            c.send <- payload             // non-blocking — drops if buffer full
+        }
+    }
+}
+```
+
+A client joined to 3 channels receives only messages for those 3 channels.
+A client NOT in a channel receives nothing even if the server is subscribed
+(e.g. server subscribed for another local client).
+
+### Backpressure: per-client send buffer
+
+Each client has `send chan []byte` (capacity 256). The write pump is a separate goroutine.
+Slow clients (bad connection, high latency) do not block the broadcast loop — their
+buffer fills up and messages are dropped rather than stalling delivery to fast clients.
+In production: disconnect slow clients after N consecutive drops.
 
 ---
 
@@ -213,29 +212,36 @@ the internal API layer.
 
 | Gap | Fix |
 |---|---|
-| Message history | Write to Cassandra/DynamoDB on publish; client fetches on reconnect |
-| Auth | Validate JWT during HTTP upgrade (before `upgrader.Upgrade()`) |
-| At-most-once delivery | Dual-write DB + Redis; client-side catch-up on reconnect |
-| Dynamic room subscriptions | Subscribe on first client join; unsubscribe on last leave |
-| Rate limiting | Token bucket per connection in the read pump |
-| Presence (online/offline) | Redis SET with TTL per user; heartbeat refreshes it |
-| Multi-room per client | One subscription goroutine per room the client is in |
-| Horizontal Redis | Redis Cluster for >1M msgs/sec; shard by room_id |
+| Message history | Write to DB on publish; client fetches on join/reconnect |
+| Auth | Validate JWT before `upgrader.Upgrade()` |
+| At-most-once delivery | Dual-write DB + Redis; sequence numbers + client catch-up |
+| Read receipts / presence | Per-user Redis key with TTL; heartbeat refreshes it |
+| Channel membership enforcement | Check membership DB before subscribing |
+| Multi-device per user | Per-user channel (Option B above) so all devices receive |
+| Redis failure | Fallback to in-process broadcast for local clients; reconnect loop |
+| Horizontal Redis | Redis Cluster sharded by channel name for > 1M msgs/sec |
 
 ---
 
-## Project Structure
+## Proved by test output
 
 ```
-websockets/
-├── DESIGN.md          # This file
-├── server.go          # Go multi-server WS server (gorilla/websocket + Redis pub/sub)
-├── server.py          # Python single-server alternative
-├── client.py          # Python CLI chat client
-├── Dockerfile         # Builds server.go
-├── docker-compose.yml # 2 servers + Redis + nginx LB
-└── nginx.conf         # WS-aware reverse proxy config
+=== ALICE received ===
+  MSG   ch=room:general  alice: hello #general!
+  DM    ch=dm:alice:bob  alice: hey bob, private message!
+
+=== BOB received ===
+  MSG   ch=room:general  alice: hello #general!
+  DM    ch=dm:alice:bob  alice: hey bob, private message!
+  DM    ch=dm:bob:charlie  bob: hey charlie!
+
+=== CHARLIE received ===
+  MSG   ch=room:general  alice: hello #general!          ← got channel msg ✓
+  DM    ch=dm:bob:charlie  bob: hey charlie!             ← got bob DM ✓
+                                                         ← no alice↔bob DM ✓
 ```
+
+---
 
 ## How to Run
 
@@ -243,25 +249,10 @@ websockets/
 cd websockets
 docker compose up --build
 
-# Open http://localhost:8090 in two browser tabs
-# Tab 1 → nginx routes to server-1 (or server-2)
-# Tab 2 → nginx routes to the other server
-# Messages cross servers via Redis — annotated with [via server-X] in the UI
-
-# Check which server you're on:
+# Open http://localhost:8090 in 3 tabs, enter different names
+# Each tab lands on a different server (round-robin)
+# Join #general → all see each other's messages
+# Open DM with another user → only those two receive it
+# /status shows which Redis channels each server is subscribed to
 curl http://localhost:8090/status
-
-# Python CLI clients:
-python client.py --name alice --port 8090
-python client.py --name bob   --port 8090
 ```
-
-## WebSocket vs Alternatives
-
-| Feature | WebSocket | SSE | HTTP Polling |
-|---|---|---|---|
-| Direction | Bidirectional | Server → Client only | Client → Server only |
-| Connection | Persistent | Persistent | New per poll |
-| Latency | Very low | Low | High (poll interval) |
-| Overhead | Minimal after handshake | Minimal | Full HTTP headers each time |
-| Horizontal scale | Needs pub/sub layer | Needs pub/sub layer | Stateless — scales freely |

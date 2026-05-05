@@ -9,7 +9,7 @@ services:
 
   server1:
     build:
-      context: ..          # root of the repo (where go.mod lives)
+      context: ..
       dockerfile: websockets/Dockerfile
     environment:
       SERVER_ID: server-1
@@ -29,12 +29,24 @@ services:
       redis:
         condition: service_healthy
 
+  server3:
+    build:
+      context: ..
+      dockerfile: websockets/Dockerfile
+    environment:
+      SERVER_ID: server-3
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
   nginx:
     image: nginx:alpine
     ports:
-      - "8090:8080"        # port 8090 to avoid conflicts
+      - "8090:8080"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - server1
       - server2
+      - server3
