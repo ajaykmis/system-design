@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -37,6 +35,8 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/emaildb?sslmode=disable
       REDIS_URL: redis://redis:6379
+    volumes:
+      - uploads:/uploads   # shared with campaign worker
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +58,22 @@ services:
       redis:
         condition: service_healthy
 
+  # Campaign worker — streams file line-by-line, fans out to queue:promotional
+  worker-campaign:
+    build:
+      context: .
+      dockerfile: Dockerfile.campaign
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/emaildb?sslmode=disable
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - uploads:/uploads   # reads the same file the marketing service dropped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # Promotional worker — scaled separately, won't starve transactional
   worker-promotional:
     build:
@@ -73,7 +89,8 @@ services:
       redis:
         condition: service_healthy
     deploy:
-      replicas: 2   # promotional can be scaled out independently
+      replicas: 2
 
 volumes:
   pgdata:
+  uploads:   # shared volume: marketing service writes, campaign worker reads

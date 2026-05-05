@@ -274,6 +274,152 @@ func handleDeliveryStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// ── Campaign handlers ─────────────────────────────────────────────────────────
+
+// CampaignRequest is what the marketing service POSTs.
+// file_path points to a newline-delimited file of user_ids on the shared
+// /uploads volume (in production this would be an S3 key). The campaign worker
+// streams it line-by-line — never loads 1M IDs into memory.
+type CampaignRequest struct {
+	TenantID           string         `json:"tenant_id"`
+	TemplateType       string         `json:"template_type"`
+	TemplateAttributes map[string]any `json:"template_attributes"`
+	Locale             string         `json:"locale"`
+	FilePath           string         `json:"file_path"`   // e.g. /uploads/campaign-123.txt
+	ScheduledAt        *time.Time     `json:"scheduled_at"` // nil = send immediately
+}
+
+type CampaignJob struct {
+	CampaignID         string         `json:"campaign_id"`
+	TenantID           string         `json:"tenant_id"`
+	TemplateType       string         `json:"template_type"`
+	TemplateAttributes map[string]any `json:"template_attributes"`
+	Locale             string         `json:"locale"`
+	FilePath           string         `json:"file_path"`
+}
+
+func handleCreateCampaign(w http.ResponseWriter, r *http.Request) {
+	var req CampaignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Locale == "" {
+		req.Locale = "en"
+	}
+	if req.TenantID == "" || req.TemplateType == "" || req.FilePath == "" {
+		http.Error(w, "tenant_id, template_type, and file_path are required", http.StatusBadRequest)
+		return
+	}
+	if !validTemplates[req.TemplateType] {
+		http.Error(w, "unknown template_type: "+req.TemplateType, http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// 1. Persist campaign record.
+	attrsJSON, _ := json.Marshal(req.TemplateAttributes)
+	var campaignID string
+	err := db.QueryRowContext(ctx, `
+		INSERT INTO campaigns
+			(tenant_id, template_type, template_attributes, locale, file_path, status, scheduled_at)
+		VALUES ($1, $2, $3, $4, $5, 'PENDING', $6)
+		RETURNING id`,
+		req.TenantID, req.TemplateType, string(attrsJSON), req.Locale, req.FilePath, req.ScheduledAt,
+	).Scan(&campaignID)
+	if err != nil {
+		log.Printf("campaign insert error: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	status := "PENDING"
+
+	// 2. If no scheduled_at, enqueue immediately. Otherwise the campaign sweeper
+	//    will pick it up when scheduled_at <= NOW().
+	if req.ScheduledAt == nil {
+		job := CampaignJob{
+			CampaignID:         campaignID,
+			TenantID:           req.TenantID,
+			TemplateType:       req.TemplateType,
+			TemplateAttributes: req.TemplateAttributes,
+			Locale:             req.Locale,
+			FilePath:           req.FilePath,
+		}
+		payload, _ := json.Marshal(job)
+		if err := rdb.LPush(ctx, "queue:campaigns", payload).Err(); err != nil {
+			log.Printf("campaign enqueue error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		db.ExecContext(ctx, `UPDATE campaigns SET status='RUNNING' WHERE id=$1`, campaignID)
+		status = "RUNNING"
+	}
+
+	resp := map[string]any{
+		"campaign_id": campaignID,
+		"status":      status,
+		"file_path":   req.FilePath,
+	}
+	if req.ScheduledAt != nil {
+		resp["scheduled_at"] = req.ScheduledAt.Format(time.RFC3339)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func handleGetCampaign(w http.ResponseWriter, r *http.Request) {
+	campaignID := r.PathValue("id")
+	ctx := r.Context()
+
+	var (
+		id              string
+		status          string
+		total, queued   int
+		sent, failed    int
+		templateType    string
+		scheduledAt     sql.NullTime
+	)
+	err := db.QueryRowContext(ctx, `
+		SELECT id, status, total_recipients, queued_count, sent_count, failed_count,
+		       template_type, scheduled_at
+		FROM campaigns WHERE id = $1`, campaignID,
+	).Scan(&id, &status, &total, &queued, &sent, &failed, &templateType, &scheduledAt)
+	if err == sql.ErrNoRows {
+		http.Error(w, "campaign not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var deliveryRate float64
+	if total > 0 {
+		deliveryRate = float64(sent) / float64(total) * 100
+	}
+
+	resp := map[string]any{
+		"campaign_id":       id,
+		"template_type":     templateType,
+		"status":            status,
+		"total_recipients":  total,
+		"queued":            queued,
+		"sent":              sent,
+		"failed":            failed,
+		"delivery_rate_pct": deliveryRate,
+	}
+	if scheduledAt.Valid {
+		resp["scheduled_at"] = scheduledAt.Time.Format(time.RFC3339)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func logDeliveryEvent(ctx context.Context, emailID, eventType string, meta map[string]any) {
@@ -324,6 +470,8 @@ func main() {
 	mux.HandleFunc("POST /send-email", handleSendEmail)
 	mux.HandleFunc("POST /schedule-email", handleScheduleEmail)
 	mux.HandleFunc("GET /delivery-stats", handleDeliveryStats)
+	mux.HandleFunc("POST /campaigns", handleCreateCampaign)
+	mux.HandleFunc("GET /campaigns/{id}", handleGetCampaign)
 
 	addr := ":8080"
 	log.Printf("Email Ingestion Service listening on %s", addr)

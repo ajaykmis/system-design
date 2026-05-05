@@ -46,6 +46,32 @@ CREATE TABLE IF NOT EXISTS delivery_events (
     metadata    JSONB NOT NULL DEFAULT '{}'
 );
 
+-- Campaigns (bulk promotional sends)
+CREATE TABLE IF NOT EXISTS campaigns (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           UUID NOT NULL REFERENCES tenants(id),
+    template_type       TEXT NOT NULL,
+    template_attributes JSONB NOT NULL DEFAULT '{}',
+    locale              TEXT NOT NULL DEFAULT 'en',
+    status              TEXT NOT NULL DEFAULT 'PENDING'
+                            CHECK (status IN ('PENDING','RUNNING','DONE','FAILED')),
+    total_recipients    INT NOT NULL DEFAULT 0,
+    queued_count        INT NOT NULL DEFAULT 0,
+    sent_count          INT NOT NULL DEFAULT 0,
+    failed_count        INT NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    file_path           TEXT NOT NULL DEFAULT '',
+    scheduled_at        TIMESTAMPTZ,        -- NULL = run immediately
+    completed_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_scheduled ON campaigns(scheduled_at) WHERE scheduled_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_emails_campaign  ON emails(campaign_id) WHERE campaign_id IS NOT NULL;
+
+-- Link emails back to the campaign that created them
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS campaign_id UUID REFERENCES campaigns(id);
+
 -- Seed a default tenant
 INSERT INTO tenants (id, name) VALUES
     ('00000000-0000-0000-0000-000000000001', 'booking-service'),

@@ -51,6 +51,28 @@ echo "=== Delivery stats for booking-service tenant ==="
 curl -s "$BASE/delivery-stats?tenant_id=00000000-0000-0000-0000-000000000001" | jq .
 
 echo ""
+echo "=== Create a campaign for 10 users (simulating 1M) ==="
+# Generate 10 user IDs to simulate a bulk send
+USER_IDS=$(python3 -c "import json; print(json.dumps(['user-' + str(i) for i in range(1,11)]))")
+CAMPAIGN=$(curl -s -X POST "$BASE/campaigns" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"tenant_id\": \"00000000-0000-0000-0000-000000000002\",
+    \"template_type\": \"PROMO_OFFER\",
+    \"template_attributes\": {\"offer\": \"Weekend sale: 40% off\"},
+    \"locale\": \"en\",
+    \"user_ids\": $USER_IDS
+  }")
+echo "$CAMPAIGN" | jq .
+
+CAMPAIGN_ID=$(echo "$CAMPAIGN" | jq -r '.campaign_id')
+
+echo ""
+echo "=== Poll campaign status (after 3s) ==="
+sleep 3
+curl -s "$BASE/campaigns/$CAMPAIGN_ID" | jq .
+
+echo ""
 echo "=== Validation: bad category ==="
 curl -s -X POST "$BASE/send-email" \
   -H "Content-Type: application/json" \
